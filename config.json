@@ -1,0 +1,13 @@
+{
+    "weather_location": "New York, US",
+    "weather_api_key": "YOUR_API_KEY_HERE",
+    "news_api_key": "YOUR_API_KEY_HERE",
+    "video_rotation": 0,
+    "widget_positions": {
+        "time": {"x": 0.5, "y": 0.15, "anchor": "center"},
+        "date": {"x": 0.5, "y": 0.20, "anchor": "center"},
+        "weather": {"x": 0.05, "y": 0.1, "anchor": "nw"},
+        "calendar": {"x": 0.95, "y": 0.1, "anchor": "ne"},
+        "news": {"x": 0.5, "y": 0.9, "anchor": "s"}
+    }
+}
