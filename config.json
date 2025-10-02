@@ -3,14 +3,43 @@
     "weather_api_key": "YOUR_API_KEY_HERE",
     "news_api_key": "YOUR_API_KEY_HERE",
     "video_rotation": 0,
+    "mirror_video": true,
     "widget_positions": {
-        "time": {"x": 0.5, "y": 0.15, "anchor": "center"},
-        "date": {"x": 0.5, "y": 0.20, "anchor": "center"},
-        "weather": {"x": 0.05, "y": 0.1, "anchor": "nw"},
-        "calendar": {"x": 0.95, "y": 0.1, "anchor": "ne"},
-        "news": {"x": 0.5, "y": 0.9, "anchor": "s"},
-        "forecast": {"x": 0.05, "y": 0.25, "anchor": "nw"},
-        "radar": {"x": 0.95, "y": 0.85, "anchor": "se"}
+        "time_1": {
+            "x": 0.5,
+            "y": 0.15,
+            "anchor": "center"
+        },
+        "date_1": {
+            "x": 0.5,
+            "y": 0.2,
+            "anchor": "center"
+        },
+        "weather_1": {
+            "x": 0.05,
+            "y": 0.1,
+            "anchor": "nw"
+        },
+        "calendar_1": {
+            "x": 0.95,
+            "y": 0.1,
+            "anchor": "ne"
+        },
+        "news_1": {
+            "x": 0.5,
+            "y": 0.9,
+            "anchor": "s"
+        },
+        "radar_1": {
+            "x": 0.5,
+            "y": 0.5,
+            "anchor": "center"
+        },
+        "radar_2": {
+            "x": 0.5,
+            "y": 0.5,
+            "anchor": "center"
+        }
     },
     "radar_settings": {
         "zoom": 5,
