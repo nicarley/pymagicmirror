@@ -4,10 +4,30 @@
     "news_api_key": "YOUR_API_KEY_HERE",
     "video_rotation": 0,
     "widget_positions": {
-        "time": {"x": 0.5, "y": 0.15, "anchor": "center"},
-        "date": {"x": 0.5, "y": 0.20, "anchor": "center"},
-        "weather": {"x": 0.05, "y": 0.1, "anchor": "nw"},
-        "calendar": {"x": 0.95, "y": 0.1, "anchor": "ne"},
-        "news": {"x": 0.5, "y": 0.9, "anchor": "s"}
+        "time": {
+            "x": 0.5,
+            "y": 0.15,
+            "anchor": "center"
+        },
+        "date": {
+            "x": 0.53125,
+            "y": 0.20833333333333334,
+            "anchor": "center"
+        },
+        "weather": {
+            "x": 0.21614583333333334,
+            "y": 0.06574074074074074,
+            "anchor": "nw"
+        },
+        "calendar": {
+            "x": 0.9489583333333333,
+            "y": 0.05092592592592592,
+            "anchor": "ne"
+        },
+        "news": {
+            "x": 0.5,
+            "y": 0.9,
+            "anchor": "s"
+        }
     }
 }
