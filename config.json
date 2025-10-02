@@ -1,5 +1,5 @@
 {
-    "weather_location": "New York, US",
+    "weather_location": "Salem, IL, US",
     "weather_api_key": "YOUR_API_KEY_HERE",
     "news_api_key": "YOUR_API_KEY_HERE",
     "video_rotation": 0,
@@ -25,8 +25,8 @@
             "anchor": "ne"
         },
         "news": {
-            "x": 0.5,
-            "y": 0.9,
+            "x": 0.4375,
+            "y": 0.962037037037037,
             "anchor": "s"
         }
     }
