@@ -2,7 +2,7 @@
 import time
 import calendar
 import requests
-from datetime import datetime
+from datetime import datetime, date
 import cv2
 import numpy as np
 import math
@@ -43,6 +43,7 @@ class BaseWidget:
         self.widget_name = widget_name
         self.text = ""
         self.params = self.get_draw_params()
+        self.update_timer = None
 
     def get_position(self, win_width, win_height):
         pos_data = self.config["widget_positions"].get(self.widget_name)
@@ -56,7 +57,12 @@ class BaseWidget:
 
     def update(self, app):
         self._update_text()
-        app.after(3600000, lambda: self.update(app))
+        refresh_interval_ms = self.get_refresh_interval()
+        self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
+
+    def get_refresh_interval(self):
+        # Default to 1 hour
+        return self.config.get("feed_refresh_interval_ms", 3600000)
 
     def draw(self, painter, app):
         win_width = app.central_widget.width()
@@ -88,14 +94,14 @@ class TimeWidget(BaseWidget):
             self.text = time.strftime('%H:%M:%S')
     def update(self, app):
         self._update_text()
-        app.after(1000, lambda: self.update(app))
+        self.update_timer = app.after(1000, lambda: self.update(app))
 
 class DateWidget(BaseWidget):
     def _update_text(self):
         self.text = time.strftime('%A, %B %d, %Y')
     def update(self, app):
         self._update_text()
-        app.after(1000, lambda: self.update(app))
+        self.update_timer = app.after(1000, lambda: self.update(app))
 
 class WeatherWidget(BaseWidget):
     def _update_text(self):
@@ -111,9 +117,6 @@ class WeatherWidget(BaseWidget):
             self.text = f"{location}\n{current_forecast['temperature']}°{current_forecast['temperatureUnit']}, {current_forecast['shortForecast']}"
         except requests.exceptions.RequestException: self.text = "Weather: No Connection"
         except Exception as e: self.text = "Weather: Error"; print(f"NWS Weather update error: {e}")
-    def update(self, app):
-        self._update_text()
-        app.after(900000, lambda: self.update(app))
 
 class FiveDayForecastWidget(BaseWidget):
     def _update_text(self):
@@ -142,16 +145,10 @@ class FiveDayForecastWidget(BaseWidget):
             self.text = "\n".join(forecast_lines)
         except requests.exceptions.RequestException: self.text = "Forecast: No Connection"
         except Exception as e: self.text = "Forecast: Error"; print(f"NWS Forecast update error: {e}")
-    def update(self, app):
-        self._update_text()
-        app.after(14400000, lambda: self.update(app))
 
 class CalendarWidget(BaseWidget):
     def _update_text(self):
         self.text = calendar.month(time.localtime().tm_year, time.localtime().tm_mon)
-    def update(self, app):
-        self._update_text()
-        app.after(3600000, lambda: self.update(app))
 
 class ICalWidget(BaseWidget):
     def _update_text(self):
@@ -173,33 +170,32 @@ class ICalWidget(BaseWidget):
                 for component in cal.walk():
                     if component.name == "VEVENT":
                         dtstart_prop = component.get('dtstart')
-                        if not dtstart_prop:
-                            continue
+                        if not dtstart_prop: continue
                         
                         dtstart = dtstart_prop.dt
-                        
+                        summary = component.get('summary')
+
                         if isinstance(dtstart, datetime):
-                            if dtstart.tzinfo is None or dtstart.tzinfo.utcoffset(dtstart) is None:
+                            if dtstart.tzinfo is None:
                                 dtstart = utc.localize(dtstart)
                             if dtstart > now:
-                                all_events.append((dtstart, component.get('summary')))
-                        else: # is a date object
-                            event_date = dtstart
-                            today = now.date()
-                            if event_date > today:
-                                dtstart_as_datetime = utc.localize(datetime.combine(event_date, datetime.min.time()))
-                                all_events.append((dtstart_as_datetime, component.get('summary')))
+                                all_events.append((dtstart, summary, True))
+                        elif isinstance(dtstart, date):
+                            if dtstart > now.date():
+                                all_events.append((dtstart, summary, False))
 
             except Exception as e:
                 print(f"iCal update error for url {url}: {e}")
         
         all_events.sort()
         
-        self.text = "\n".join([f"{e[0].strftime('%m/%d')}: {e[1]}" for e in all_events[:5]]) or "No upcoming events."
-
-    def update(self, app):
-        self._update_text()
-        app.after(3600000, lambda: self.update(app))
+        event_lines = []
+        for event_time, summary, is_datetime in all_events[:5]:
+            if is_datetime:
+                event_lines.append(f"{event_time.strftime('%m/%d %I:%M %p')}: {summary}")
+            else:
+                event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
+        self.text = "\n".join(event_lines) or "No upcoming events."
 
 class RssWidget(BaseWidget):
     def _update_text(self):
@@ -223,10 +219,6 @@ class RssWidget(BaseWidget):
 
         self.text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
 
-    def update(self, app):
-        self._update_text()
-        app.after(1800000, lambda: self.update(app))
-
 class RadarWidget(BaseWidget):
     def __init__(self, config, widget_name="radar"):
         super().__init__(config, widget_name)
@@ -236,10 +228,6 @@ class RadarWidget(BaseWidget):
     def _update_text(self):
         self.text = "NWS Radar Not Yet Implemented"
         self.radar_image = None
-
-    def update(self, app):
-        self._update_text()
-        app.after(900000, lambda: self.update(app))
 
     def draw(self, painter, app):
         if self.text:
@@ -261,17 +249,38 @@ class WidgetManager:
     def load_widgets(self):
         self.widgets = {}
         active_widget_names = self.config.get("widget_positions", {}).keys()
+        # Clean up orphaned widgets from the config file
+        for widget_name in list(active_widget_names):
+            widget_type = widget_name.split('_')[0]
+            if widget_type not in WIDGET_CLASSES:
+                print(f"Warning: Removing unknown widget type '{widget_type}' for widget '{widget_name}' from config.")
+                del self.app.config["widget_positions"][widget_name]
+                if widget_name in self.app.config["widget_settings"]:
+                    del self.app.config["widget_settings"][widget_name]
+        
+        if self.app.config != self.config:
+            self.app.save_config()
+
+        # Load the remaining active widgets
+        active_widget_names = self.config.get("widget_positions", {}).keys()
         for widget_name in active_widget_names:
             widget_type = widget_name.split('_')[0]
             if widget_type in WIDGET_CLASSES:
                 self.widgets[widget_name] = WIDGET_CLASSES[widget_type](self.config, widget_name)
-            else:
-                print(f"Warning: Unknown widget type '{widget_type}' for widget '{widget_name}' in config.")
         self.start_updates()
 
     def start_updates(self):
         for widget in self.widgets.values():
             widget.update(self.app)
+
+    def stop_updates(self):
+        for widget in self.widgets.values():
+            if widget.update_timer:
+                widget.update_timer.stop()
+
+    def restart_updates(self):
+        self.stop_updates()
+        self.start_updates()
 
     def draw_all(self, painter):
         for widget_name in list(self.config.get("widget_positions", {}).keys()):

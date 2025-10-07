@@ -4,8 +4,8 @@
     "mirror_video": true,
     "widget_positions": {
         "rss_1": {
-            "x": 0.5718749999999999,
-            "y": 0.8865740740740741,
+            "x": 0.5883680555555555,
+            "y": 0.8416761148904006,
             "anchor": "center"
         },
         "weather_1": {
@@ -24,8 +24,13 @@
             "anchor": "center"
         },
         "ical_1": {
-            "x": 0.20104166666666667,
-            "y": 0.03935185185185185,
+            "x": 0.23324652777777777,
+            "y": 0.14601662887377176,
+            "anchor": "center"
+        },
+        "calendar_1": {
+            "x": 0.12673611111111113,
+            "y": 0.013888888888888923,
             "anchor": "center"
         }
     },
@@ -35,12 +40,13 @@
         "time_1": {},
         "rss_1": {
             "urls": [
-                "http://rss.cnn.com/rss/cnn_topstories.rss"
+                "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
             ]
         },
         "ical_1": {
             "urls": [
-                "webcal://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb"
+                "https://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb",
+                "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M"
             ]
         },
         "date_1": {},
@@ -54,5 +60,6 @@
     },
     "ical_url": "YOUR_ICAL_URL_HERE",
     "rss_feed_url": "http://rss.cnn.com/rss/cnn_topstories.rss",
-    "text_scale_multiplier": 1.36
+    "text_scale_multiplier": 1.25,
+    "feed_refresh_interval_ms": 3600000
 }
