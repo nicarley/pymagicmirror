@@ -61,5 +61,6 @@
     "ical_url": "YOUR_ICAL_URL_HERE",
     "rss_feed_url": "http://rss.cnn.com/rss/cnn_topstories.rss",
     "text_scale_multiplier": 1.25,
-    "feed_refresh_interval_ms": 3600000
+    "feed_refresh_interval_ms": 3600000,
+    "camera_index": 0
 }

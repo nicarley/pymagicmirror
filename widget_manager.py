@@ -172,22 +172,33 @@ class ICalWidget(BaseWidget):
                         dtstart_prop = component.get('dtstart')
                         if not dtstart_prop: continue
                         
-                        dtstart = dtstart_prop.dt
+                        dtstart_raw = dtstart_prop.dt
                         summary = component.get('summary')
 
-                        if isinstance(dtstart, datetime):
-                            if dtstart.tzinfo is None:
-                                dtstart = utc.localize(dtstart)
-                            if dtstart > now:
-                                all_events.append((dtstart, summary, True))
-                        elif isinstance(dtstart, date):
-                            if dtstart > now.date():
-                                all_events.append((dtstart, summary, False))
+                        event_dt = None
+                        is_datetime_event = False
+
+                        if isinstance(dtstart_raw, datetime):
+                            if dtstart_raw.tzinfo is None:
+                                event_dt = utc.localize(dtstart_raw)
+                            else:
+                                event_dt = dtstart_raw.astimezone(utc)
+                            is_datetime_event = True
+                        elif isinstance(dtstart_raw, date):
+                            event_dt = utc.localize(datetime.combine(dtstart_raw, datetime.min.time()))
+                            is_datetime_event = False # It's a date, so no specific time
+                        else:
+                            # Handle unexpected types, maybe log a warning and skip
+                            print(f"Warning: Unexpected dtstart type: {type(dtstart_raw)}")
+                            continue
+
+                        if event_dt and event_dt > now:
+                            all_events.append((event_dt, summary, is_datetime_event))
 
             except Exception as e:
                 print(f"iCal update error for url {url}: {e}")
         
-        all_events.sort()
+        all_events.sort(key=lambda x: x[0]) # Sort by the datetime object
         
         event_lines = []
         for event_time, summary, is_datetime in all_events[:5]:
