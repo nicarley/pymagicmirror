@@ -1,0 +1,53 @@
+{
+    "camera_index": 0,
+    "video_rotation": 0,
+    "mirror_video": false,
+    "text_scale_multiplier": 1.0,
+    "feed_refresh_interval_ms": 3600000,
+    "widget_positions": {
+        "calendar_1": {
+            "x": 0.09739583333333335,
+            "y": 0.07314814814814813,
+            "anchor": "center"
+        },
+        "date_1": {
+            "x": 0.1515625,
+            "y": 0.045370370370370394,
+            "anchor": "center"
+        },
+        "weatherforecast_1": {
+            "x": 0.9723958333333333,
+            "y": 0.061111111111111116,
+            "anchor": "center"
+        },
+        "rss_1": {
+            "x": 0.24375,
+            "y": 0.6962962962962963,
+            "anchor": "center"
+        },
+        "rss_2": {
+            "x": 0.2515625,
+            "y": 0.7861111111111111,
+            "anchor": "center"
+        }
+    },
+    "widget_settings": {
+        "calendar_1": {},
+        "date_1": {},
+        "forecast_2": {},
+        "weatherforecast_1": {
+            "location": "Salem, IL, USA"
+        },
+        "rss_1": {
+            "urls": [
+                "https://feeds.nbcnews.com/msnbc/public/news"
+            ]
+        },
+        "rss_2": {
+            "urls": [
+                "https://southernillinoisnow.com/feed/"
+            ]
+        }
+    },
+    "fullscreen": true
+}

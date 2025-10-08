@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout, 
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider
 )
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 import cv2
 from widget_manager import WidgetManager, WIDGET_CLASSES
@@ -75,15 +75,15 @@ class SettingsDialog(QDialog):
         self.camera_combo.currentIndexChanged.connect(self.live_update_camera)
         self.general_layout.addWidget(self.camera_combo)
 
-        self.general_layout.addWidget(QLabel("Weather Location (e.g., 'City, ST' or 'City, Country'):"))
-        self.location_entry = QLineEdit(self.config.get("weather_location", ""))
-        self.location_entry.textChanged.connect(self.live_update_location)
-        self.general_layout.addWidget(self.location_entry)
-
         self.mirror_video_check = QCheckBox("Mirror Video")
         self.mirror_video_check.setChecked(self.config.get("mirror_video", False))
         self.mirror_video_check.stateChanged.connect(self.live_update_mirror_video)
         self.general_layout.addWidget(self.mirror_video_check)
+
+        self.fullscreen_check = QCheckBox("Start in Fullscreen")
+        self.fullscreen_check.setChecked(self.config.get("fullscreen", True))
+        self.fullscreen_check.stateChanged.connect(self.live_update_fullscreen)
+        self.general_layout.addWidget(self.fullscreen_check)
 
         self.rotate_button = QPushButton("Rotate Video 90°")
         self.rotate_button.clicked.connect(lambda: self.parent.rotate_video())
@@ -116,12 +116,13 @@ class SettingsDialog(QDialog):
             self.config["camera_index"] = selected_camera_index
             self.parent.restart_camera()
 
-    def live_update_location(self, text):
-        self.config["weather_location"] = text
-        self.parent.widget_manager.restart_updates()
-
     def live_update_mirror_video(self, state):
         self.config["mirror_video"] = self.mirror_video_check.isChecked()
+
+    def live_update_fullscreen(self, state):
+        is_fullscreen = self.fullscreen_check.isChecked()
+        self.config["fullscreen"] = is_fullscreen
+        self.parent.set_fullscreen(is_fullscreen)
 
     def live_update_text_size(self, value):
         self.config["text_scale_multiplier"] = value / 100.0
@@ -157,9 +158,12 @@ class SettingsDialog(QDialog):
         self.refresh_widget_list()
 
     def refresh_widget_list(self):
+        current_widget = self.widget_list.currentItem().text() if self.widget_list.currentItem() else None
         self.widget_list.clear()
         for name in sorted(self.config.get("widget_positions", {})):
             self.widget_list.addItem(name)
+            if name == current_widget:
+                self.widget_list.setCurrentRow(self.widget_list.count() - 1)
 
     def add_widget(self):
         widget_type = self.widget_combo.currentText()
@@ -171,7 +175,9 @@ class SettingsDialog(QDialog):
         self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
         if widget_type in ["ical", "rss"]:
             self.config["widget_settings"][widget_name] = {"urls": []}
-        
+        elif widget_type == "weatherforecast":
+            self.config["widget_settings"][widget_name] = {"location": "New York, US"}
+
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
         items = self.widget_list.findItems(widget_name, Qt.MatchExactly)
@@ -210,6 +216,12 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("format", "24h"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(combo)
+        elif widget_type == "weatherforecast":
+            self.widget_settings_layout.addWidget(QLabel("Location:"))
+            location_entry = QLineEdit(settings.get("location", ""))
+            location_entry.setObjectName("location_entry")
+            location_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(location_entry)
         elif widget_type in ["ical", "rss"]:
             self.widget_settings_layout.addWidget(QLabel(f"{widget_type.upper()} Feed URLs:"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
@@ -246,6 +258,9 @@ class SettingsDialog(QDialog):
         if widget_type == "time":
             combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
             if combo: self.config["widget_settings"][widget_name]["format"] = combo.currentText()
+        elif widget_type == "weatherforecast":
+            location_entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
+            if location_entry: self.config["widget_settings"][widget_name]["location"] = location_entry.text()
         elif widget_type in ["ical", "rss"]:
             url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
             if url_list: self.config["widget_settings"][widget_name]["urls"] = [url_list.item(i).text() for i in range(url_list.count())]
@@ -260,6 +275,7 @@ class SettingsDialog(QDialog):
     def reject(self):
         self.parent.config.clear()
         self.parent.config.update(self.original_config)
+        self.parent.set_fullscreen(self.parent.config.get("fullscreen", True))
         self.parent.restart_camera()
         self.parent.widget_manager.config = self.parent.config
         self.parent.widget_manager.load_widgets()
@@ -291,12 +307,12 @@ class MagicMirrorApp(QMainWindow):
         self.widget_manager = WidgetManager(self, self.config)
         self.setup_camera()
         self.setup_overlay()
-        self.showFullScreen()
+        self.set_fullscreen(self.config.get("fullscreen", True))
 
     def detect_available_cameras(self):
         available_cameras = []
         for i in range(10):
-            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(i)
             if cap.isOpened():
                 available_cameras.append(i)
                 cap.release()
@@ -305,9 +321,9 @@ class MagicMirrorApp(QMainWindow):
     def load_config(self):
         default_config = {
             "camera_index": 0,
-            "weather_location": "New York, US",
             "video_rotation": 0, 
             "mirror_video": False, 
+            "fullscreen": True,
             "text_scale_multiplier": 1.0,
             "feed_refresh_interval_ms": 3600000, # 1 hour
             "widget_positions": {},
@@ -318,6 +334,8 @@ class MagicMirrorApp(QMainWindow):
         else:
             with open(CONFIG_FILE, 'r') as f: self.config = json.load(f)
             if "news_api_key" in self.config: del self.config["news_api_key"]
+            if "radar_settings" in self.config: del self.config["radar_settings"]
+            if "weather_location" in self.config: del self.config["weather_location"]
             for key, value in default_config.items():
                 if key not in self.config: self.config[key] = value
         self.save_config()
@@ -332,7 +350,7 @@ class MagicMirrorApp(QMainWindow):
         if hasattr(self, 'cap') and self.cap.isOpened():
             self.cap.release()
 
-        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(camera_index)
         if not self.cap.isOpened():
             self.show_error(f"Error: Could not open camera {camera_index}.")
             return
@@ -347,6 +365,12 @@ class MagicMirrorApp(QMainWindow):
 
     def rotate_video(self):
         self.config["video_rotation"] = (self.config.get("video_rotation", 0) + 1) % 4
+
+    def set_fullscreen(self, fullscreen):
+        if fullscreen:
+            self.showFullScreen()
+        else:
+            self.showNormal()
 
     def setup_overlay(self):
         self.settings_button = QPushButton("⚙️", self)
@@ -472,9 +496,12 @@ class MagicMirrorApp(QMainWindow):
             self.save_config()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape and self.isFullScreen(): self.showNormal()
-        elif event.key() == Qt.Key_F11: self.showFullScreen() if not self.isFullScreen() else self.showNormal()
-        elif event.key() == Qt.Key_E: self.edit_button.toggle()
+        if event.key() == Qt.Key_Escape:
+            self.set_fullscreen(False)
+        elif event.key() == Qt.Key_F11:
+            self.set_fullscreen(not self.isFullScreen())
+        elif event.key() == Qt.Key_E:
+            self.edit_button.toggle()
 
     def open_settings_dialog(self):
         dialog = SettingsDialog(self)
@@ -502,6 +529,7 @@ class MagicMirrorApp(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon("resources/icon.png"))
     window = MagicMirrorApp()
     window.show()
     sys.exit(app.exec())

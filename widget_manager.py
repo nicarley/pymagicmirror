@@ -78,9 +78,9 @@ class BaseWidget:
         widget_type = self.widget_name.split('_')[0]
         all_params = {
             "time": {"scale": 3, "thick": 3}, "date": {"scale": 1.2, "thick": 2}, 
-            "weather": {"scale": 1, "thick": 2}, "calendar": {"scale": 0.8, "thick": 1}, 
-            "forecast": {"scale": 0.8, "thick": 1},
-            "radar": {"scale": 1, "thick": 1}, "ical": {"scale": 0.8, "thick": 1}, "rss": {"scale": 0.8, "thick": 1}
+            "calendar": {"scale": 0.8, "thick": 1}, 
+            "ical": {"scale": 0.8, "thick": 1}, "rss": {"scale": 0.8, "thick": 1},
+            "weatherforecast": {"scale": 0.9, "thick": 1}
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -103,48 +103,57 @@ class DateWidget(BaseWidget):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app))
 
-class WeatherWidget(BaseWidget):
+class WeatherForecastWidget(BaseWidget):
     def _update_text(self):
-        location = self.config.get("weather_location")
-        if not location: self.text = "Set Weather Location"; return
-        forecast_url = get_nws_forecast_url(location)
-        if not forecast_url: self.text = "Invalid Location for NWS"; return
-        try:
-            headers = {'User-Agent': USER_AGENT, 'Accept': 'application/geo+json'}
-            response = requests.get(forecast_url, headers=headers, timeout=10)
-            data = response.json()
-            current_forecast = data.get('properties', {}).get('periods', [])[0]
-            self.text = f"{location}\n{current_forecast['temperature']}°{current_forecast['temperatureUnit']}, {current_forecast['shortForecast']}"
-        except requests.exceptions.RequestException: self.text = "Weather: No Connection"
-        except Exception as e: self.text = "Weather: Error"; print(f"NWS Weather update error: {e}")
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        location = widget_settings.get("location")
+        if not location:
+            self.text = "Set Location in Widget Settings"
+            return
 
-class FiveDayForecastWidget(BaseWidget):
-    def _update_text(self):
-        location = self.config.get("weather_location")
-        if not location: self.text = "Set Weather Location"; return
         forecast_url = get_nws_forecast_url(location)
-        if not forecast_url: self.text = "Invalid Location for NWS"; return
+        if not forecast_url:
+            self.text = f"Invalid NWS Location:\n{location}"
+            return
         try:
             headers = {'User-Agent': USER_AGENT, 'Accept': 'application/geo+json'}
             response = requests.get(forecast_url, headers=headers, timeout=10)
             data = response.json()
+            
             periods = data.get('properties', {}).get('periods', [])
+            if not periods:
+                self.text = f"No forecast data for {location}"
+                return
+            
+            current_forecast = periods[0]
+            current_weather_line = f"{location}\n{current_forecast['temperature']}°{current_forecast['temperatureUnit']}, {current_forecast['shortForecast']}"
+
             daily_forecasts = {}
             for p in periods:
                 day_name = datetime.fromisoformat(p['startTime']).strftime('%Y-%m-%d')
-                if day_name not in daily_forecasts: daily_forecasts[day_name] = {'high': -999, 'low': 999, 'desc': ''}
+                if day_name not in daily_forecasts:
+                    daily_forecasts[day_name] = {'high': -999, 'low': 999, 'desc': ''}
                 daily_forecasts[day_name]['high'] = max(daily_forecasts[day_name]['high'], p['temperature'])
                 daily_forecasts[day_name]['low'] = min(daily_forecasts[day_name]['low'], p['temperature'])
-                if p.get('isDaytime', False) or not daily_forecasts[day_name]['desc']: daily_forecasts[day_name]['desc'] = p['shortForecast']
+                if p.get('isDaytime', False) or not daily_forecasts[day_name]['desc']:
+                    daily_forecasts[day_name]['desc'] = p['shortForecast']
+            
             forecast_lines = []
             sorted_days = sorted(daily_forecasts.keys())
-            for day_str in sorted_days[:5]:
+            for day_str in sorted_days[1:6]: # Start from the next day for 5-day forecast
                 values = daily_forecasts[day_str]
-                day_name = datetime.strptime(day_str, '%Y-%m-%d').strftime('%a')
-                forecast_lines.append(f"{day_name}: {values['desc']}, {values['low']}°/{values['high']}°F")
-            self.text = "\n".join(forecast_lines)
-        except requests.exceptions.RequestException: self.text = "Forecast: No Connection"
-        except Exception as e: self.text = "Forecast: Error"; print(f"NWS Forecast update error: {e}")
+                day_name_short = datetime.strptime(day_str, '%Y-%m-%d').strftime('%a')
+                forecast_lines.append(f"{day_name_short}: {values['desc']}, {values['low']}°/{values['high']}°F")
+            
+            forecast_text = "\n".join(forecast_lines)
+            
+            self.text = f"{current_weather_line}\n\n{forecast_text}"
+
+        except requests.exceptions.RequestException:
+            self.text = "Weather: No Connection"
+        except Exception as e:
+            self.text = "Weather: Error"
+            print(f"WeatherForecast update error: {e}")
 
 class CalendarWidget(BaseWidget):
     def _update_text(self):
@@ -189,7 +198,6 @@ class ICalWidget(BaseWidget):
                             print(f"Warning: Skipping event due to unexpected dtstart type: {type(dtstart_raw)}")
                             continue
 
-                        # Now ensure it's UTC-aware for comparison and storage
                         if event_dt_for_processing.tzinfo is None:
                             event_dt_final = pytz.utc.localize(event_dt_for_processing)
                         else:
@@ -201,7 +209,7 @@ class ICalWidget(BaseWidget):
             except Exception as e:
                 print(f"iCal update error for url {url}: {e}")
         
-        all_events.sort(key=lambda x: x[0]) # Sort by the datetime object
+        all_events.sort(key=lambda x: x[0])
         
         event_lines = []
         central_tz = pytz.timezone('US/Central')
@@ -235,23 +243,9 @@ class RssWidget(BaseWidget):
 
         self.text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
 
-class RadarWidget(BaseWidget):
-    def __init__(self, config, widget_name="radar"):
-        super().__init__(config, widget_name)
-        self.radar_image = None
-        self.text = ""
-
-    def _update_text(self):
-        self.text = "NWS Radar Not Yet Implemented"
-        self.radar_image = None
-
-    def draw(self, painter, app):
-        if self.text:
-            super().draw(painter, app)
-
 WIDGET_CLASSES = {
-    "time": TimeWidget, "date": DateWidget, "weather": WeatherWidget,
-    "calendar": CalendarWidget, "forecast": FiveDayForecastWidget, "radar": RadarWidget,
+    "time": TimeWidget, "date": DateWidget,
+    "calendar": CalendarWidget, "weatherforecast": WeatherForecastWidget,
     "ical": ICalWidget, "rss": RssWidget
 }
 
@@ -265,7 +259,6 @@ class WidgetManager:
     def load_widgets(self):
         self.widgets = {}
         active_widget_names = self.config.get("widget_positions", {}).keys()
-        # Clean up orphaned widgets from the config file
         for widget_name in list(active_widget_names):
             widget_type = widget_name.split('_')[0]
             if widget_type not in WIDGET_CLASSES:
@@ -277,7 +270,6 @@ class WidgetManager:
         if self.app.config != self.config:
             self.app.save_config()
 
-        # Load the remaining active widgets
         active_widget_names = self.config.get("widget_positions", {}).keys()
         for widget_name in active_widget_names:
             widget_type = widget_name.split('_')[0]
