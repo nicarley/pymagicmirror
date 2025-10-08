@@ -8,7 +8,7 @@ import numpy as np
 import math
 import feedparser
 from icalendar import Calendar
-from pytz import utc
+import pytz
 
 # --- NWS API Helper --- 
 NWS_CACHE = {}
@@ -148,6 +148,7 @@ class FiveDayForecastWidget(BaseWidget):
 
 class CalendarWidget(BaseWidget):
     def _update_text(self):
+        calendar.setfirstweekday(calendar.SUNDAY)
         self.text = calendar.month(time.localtime().tm_year, time.localtime().tm_mon)
 
 class ICalWidget(BaseWidget):
@@ -159,7 +160,7 @@ class ICalWidget(BaseWidget):
             return
 
         all_events = []
-        now = datetime.now(utc)
+        now = datetime.now(pytz.utc)
 
         for url in ical_urls:
             if not url or "YOUR_ICAL_URL_HERE" in url:
@@ -190,9 +191,9 @@ class ICalWidget(BaseWidget):
 
                         # Now ensure it's UTC-aware for comparison and storage
                         if event_dt_for_processing.tzinfo is None:
-                            event_dt_final = utc.localize(event_dt_for_processing)
+                            event_dt_final = pytz.utc.localize(event_dt_for_processing)
                         else:
-                            event_dt_final = event_dt_for_processing.astimezone(utc)
+                            event_dt_final = event_dt_for_processing.astimezone(pytz.utc)
 
                         if event_dt_final and event_dt_final > now:
                             all_events.append((event_dt_final, summary, is_datetime_event))
@@ -203,9 +204,11 @@ class ICalWidget(BaseWidget):
         all_events.sort(key=lambda x: x[0]) # Sort by the datetime object
         
         event_lines = []
+        central_tz = pytz.timezone('US/Central')
         for event_time, summary, is_datetime in all_events[:5]:
             if is_datetime:
-                event_lines.append(f"{event_time.strftime('%m/%d %I:%M %p')}: {summary}")
+                event_time_central = event_time.astimezone(central_tz)
+                event_lines.append(f"{event_time_central.strftime('%m/%d %I:%M %p')}: {summary}")
             else:
                 event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
         self.text = "\n".join(event_lines) or "No upcoming events."

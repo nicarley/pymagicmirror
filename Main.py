@@ -131,8 +131,126 @@ class SettingsDialog(QDialog):
         self.parent.widget_manager.restart_updates()
 
     def setup_widget_tab(self):
-        # ... (widget tab setup remains the same)
-        pass
+        add_remove_layout = QHBoxLayout()
+        self.widget_combo = QComboBox()
+        self.widget_combo.addItems(sorted(WIDGET_CLASSES.keys()))
+        add_remove_layout.addWidget(self.widget_combo)
+
+        self.add_button = QPushButton("Add")
+        self.add_button.clicked.connect(self.add_widget)
+        add_remove_layout.addWidget(self.add_button)
+
+        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button.clicked.connect(self.remove_widget)
+        add_remove_layout.addWidget(self.remove_button)
+        self.widget_layout.addLayout(add_remove_layout)
+
+        self.widget_list = QListWidget()
+        self.widget_list.itemClicked.connect(self.display_widget_settings)
+        self.widget_layout.addWidget(self.widget_list)
+
+        self.widget_settings_area = QWidget()
+        self.widget_settings_area.setObjectName("settings_area")
+        self.widget_settings_layout = QVBoxLayout(self.widget_settings_area)
+        self.widget_layout.addWidget(self.widget_settings_area)
+
+        self.refresh_widget_list()
+
+    def refresh_widget_list(self):
+        self.widget_list.clear()
+        for name in sorted(self.config.get("widget_positions", {})):
+            self.widget_list.addItem(name)
+
+    def add_widget(self):
+        widget_type = self.widget_combo.currentText()
+        i = 1
+        while f"{widget_type}_{i}" in self.config["widget_positions"]:
+            i += 1
+        widget_name = f"{widget_type}_{i}"
+
+        self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
+        if widget_type in ["ical", "rss"]:
+            self.config["widget_settings"][widget_name] = {"urls": []}
+        
+        self.parent.widget_manager.load_widgets()
+        self.refresh_widget_list()
+        items = self.widget_list.findItems(widget_name, Qt.MatchExactly)
+        if items:
+            self.widget_list.setCurrentItem(items[0])
+            self.display_widget_settings(items[0])
+
+    def remove_widget(self):
+        current_item = self.widget_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "Warning", "Please select a widget to remove.")
+            return
+
+        widget_name = current_item.text()
+        reply = QMessageBox.question(self, "Confirm", f"Are you sure you want to remove '{widget_name}'?", QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if widget_name in self.config["widget_positions"]: del self.config["widget_positions"][widget_name]
+            if widget_name in self.config["widget_settings"]: del self.config["widget_settings"][widget_name]
+            self.parent.widget_manager.load_widgets()
+            self.refresh_widget_list()
+            self.clear_layout(self.widget_settings_layout)
+
+    def display_widget_settings(self, item):
+        self.save_current_widget_ui_to_config()
+        self.clear_layout(self.widget_settings_layout)
+
+        widget_name = item.text()
+        self.widget_settings_area.setProperty("current_widget", widget_name)
+        widget_type = widget_name.split('_')[0]
+        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+
+        if widget_type == "time":
+            self.widget_settings_layout.addWidget(QLabel("Time Format:"))
+            combo = QComboBox(); combo.setObjectName("time_format_combo")
+            combo.addItems(["24h", "12h"])
+            combo.setCurrentText(settings.get("format", "24h"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(combo)
+        elif widget_type in ["ical", "rss"]:
+            self.widget_settings_layout.addWidget(QLabel(f"{widget_type.upper()} Feed URLs:"))
+            url_list = QListWidget(); url_list.setObjectName("url_list")
+            url_list.addItems(settings.get("urls", []))
+            self.widget_settings_layout.addWidget(url_list)
+            
+            add_url_button = QPushButton("Add URL"); remove_url_button = QPushButton("Remove Selected URL")
+            add_url_button.clicked.connect(self.add_url)
+            remove_url_button.clicked.connect(self.remove_url)
+            self.widget_settings_layout.addWidget(add_url_button)
+            self.widget_settings_layout.addWidget(remove_url_button)
+
+    def add_url(self):
+        url, ok = QInputDialog.getText(self, "Add URL", "Enter the new URL:")
+        if ok and url:
+            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if url_list: 
+                url_list.addItem(url)
+                self.save_current_widget_ui_to_config()
+
+    def remove_url(self):
+        url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
+        if url_list and url_list.currentItem():
+            url_list.takeItem(url_list.row(url_list.currentItem()))
+            self.save_current_widget_ui_to_config()
+
+    def save_current_widget_ui_to_config(self, *args):
+        widget_name = self.widget_settings_area.property("current_widget")
+        if not widget_name: return
+
+        widget_type = widget_name.split('_')[0]
+        if widget_name not in self.config["widget_settings"]: self.config["widget_settings"][widget_name] = {}
+
+        if widget_type == "time":
+            combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
+            if combo: self.config["widget_settings"][widget_name]["format"] = combo.currentText()
+        elif widget_type in ["ical", "rss"]:
+            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if url_list: self.config["widget_settings"][widget_name]["urls"] = [url_list.item(i).text() for i in range(url_list.count())]
+        
+        self.parent.widget_manager.restart_updates()
 
     def accept(self):
         self.save_current_widget_ui_to_config()
@@ -146,6 +264,11 @@ class SettingsDialog(QDialog):
         self.parent.widget_manager.config = self.parent.config
         self.parent.widget_manager.load_widgets()
         super().reject()
+
+    def clear_layout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
 
 class MagicMirrorApp(QMainWindow):
     def __init__(self):
@@ -187,10 +310,8 @@ class MagicMirrorApp(QMainWindow):
             "mirror_video": False, 
             "text_scale_multiplier": 1.0,
             "feed_refresh_interval_ms": 3600000, # 1 hour
-            "widget_positions": { # ... default widgets ... 
-            },
-            "widget_settings": { # ... default settings ... 
-            }
+            "widget_positions": {},
+            "widget_settings": {}
         }
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
@@ -227,7 +348,6 @@ class MagicMirrorApp(QMainWindow):
     def rotate_video(self):
         self.config["video_rotation"] = (self.config.get("video_rotation", 0) + 1) % 4
 
-    # ... (rest of the app, drawing, mouse events, etc. remain largely the same) ...
     def setup_overlay(self):
         self.settings_button = QPushButton("⚙️", self)
         self.settings_button.clicked.connect(self.open_settings_dialog)
