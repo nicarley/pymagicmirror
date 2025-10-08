@@ -175,25 +175,27 @@ class ICalWidget(BaseWidget):
                         dtstart_raw = dtstart_prop.dt
                         summary = component.get('summary')
 
-                        event_dt = None
+                        event_dt_final = None
                         is_datetime_event = False
 
                         if isinstance(dtstart_raw, datetime):
-                            if dtstart_raw.tzinfo is None:
-                                event_dt = utc.localize(dtstart_raw)
-                            else:
-                                event_dt = dtstart_raw.astimezone(utc)
+                            event_dt_for_processing = dtstart_raw
                             is_datetime_event = True
                         elif isinstance(dtstart_raw, date):
-                            event_dt = utc.localize(datetime.combine(dtstart_raw, datetime.min.time()))
-                            is_datetime_event = False # It's a date, so no specific time
+                            event_dt_for_processing = datetime.combine(dtstart_raw, datetime.min.time())
+                            is_datetime_event = False
                         else:
-                            # Handle unexpected types, maybe log a warning and skip
-                            print(f"Warning: Unexpected dtstart type: {type(dtstart_raw)}")
+                            print(f"Warning: Skipping event due to unexpected dtstart type: {type(dtstart_raw)}")
                             continue
 
-                        if event_dt and event_dt > now:
-                            all_events.append((event_dt, summary, is_datetime_event))
+                        # Now ensure it's UTC-aware for comparison and storage
+                        if event_dt_for_processing.tzinfo is None:
+                            event_dt_final = utc.localize(event_dt_for_processing)
+                        else:
+                            event_dt_final = event_dt_for_processing.astimezone(utc)
+
+                        if event_dt_final and event_dt_final > now:
+                            all_events.append((event_dt_final, summary, is_datetime_event))
 
             except Exception as e:
                 print(f"iCal update error for url {url}: {e}")
