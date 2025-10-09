@@ -93,7 +93,7 @@ class TimeWidget(BaseWidget):
     def _update_text(self):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         time_format = widget_settings.get("format", "24h")
-        self.text = time.strftime('%I:%M:%S %p' if time_format == "12h" else '%H:%M:%S')
+        self.text = time.strftime('%I:%M %p' if time_format == "12h" else '%H:%M')
     def update(self, app):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app))
@@ -109,11 +109,11 @@ class WorldClockWidget(BaseWidget):
     def _update_text(self):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         timezone_str = widget_settings.get("timezone", "UTC")
+        display_name = widget_settings.get("display_name", timezone_str.split('/')[-1].replace('_', ' '))
         try:
             tz = pytz.timezone(timezone_str)
             now = datetime.now(tz)
-            city = timezone_str.split('/')[-1].replace('_', ' ')
-            self.text = f"{city}\n{now.strftime('%I:%M:%S %p')}"
+            self.text = f"{display_name}\n{now.strftime('%I:%M %p')}"
         except pytz.exceptions.UnknownTimeZoneError:
             self.text = f"Unknown Zone:\n{timezone_str}"
         except Exception as e:
