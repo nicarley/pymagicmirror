@@ -164,6 +164,13 @@ class ICalWidget(BaseWidget):
     def _update_text(self):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         ical_urls = widget_settings.get("urls", [])
+        display_tz_str = widget_settings.get("timezone", "UTC")
+        try:
+            display_tz = pytz.timezone(display_tz_str)
+        except pytz.exceptions.UnknownTimeZoneError:
+            print(f"Warning: Unknown timezone '{display_tz_str}' for widget {self.widget_name}. Defaulting to UTC.")
+            display_tz = pytz.utc
+
         if not ical_urls:
             self.text = "Set iCal URLs in widget settings"
             return
@@ -203,7 +210,7 @@ class ICalWidget(BaseWidget):
                         else:
                             event_dt_final = event_dt_for_processing.astimezone(pytz.utc)
 
-                        if event_dt_final and event_dt_final > now:
+                        if event_dt_final and event_dt_final >= now:
                             all_events.append((event_dt_final, summary, is_datetime_event))
 
             except Exception as e:
@@ -212,11 +219,10 @@ class ICalWidget(BaseWidget):
         all_events.sort(key=lambda x: x[0])
         
         event_lines = []
-        central_tz = pytz.timezone('US/Central')
         for event_time, summary, is_datetime in all_events[:5]:
             if is_datetime:
-                event_time_central = event_time.astimezone(central_tz)
-                event_lines.append(f"{event_time_central.strftime('%m/%d %I:%M %p')}: {summary}")
+                event_time_local = event_time.astimezone(display_tz)
+                event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
             else:
                 event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
         self.text = "\n".join(event_lines) or "No upcoming events."

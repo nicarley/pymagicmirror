@@ -27,7 +27,7 @@ class VideoLabel(QLabel):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        if self._pixmap.isNull():
+        if self._pixmap.isNull() or not self.main_app.is_camera_active():
             painter.fillRect(self.rect(), Qt.black)
             self.main_app.draw_all_widgets(painter)
             return
@@ -69,10 +69,13 @@ class SettingsDialog(QDialog):
         self.general_layout.addWidget(QLabel("Webcam Device:"))
         self.camera_combo = QComboBox()
         self.available_cameras = self.parent.detect_available_cameras()
+        self.camera_combo.addItem("No Video")
         self.camera_combo.addItems([f"Camera {i}" for i in self.available_cameras])
-        current_cam_index = self.config.get("camera_index", 0)
-        if current_cam_index in self.available_cameras:
-            self.camera_combo.setCurrentIndex(self.available_cameras.index(current_cam_index))
+        current_cam_index = self.config.get("camera_index", -1)
+        if current_cam_index == -1:
+            self.camera_combo.setCurrentIndex(0)
+        elif current_cam_index in self.available_cameras:
+            self.camera_combo.setCurrentIndex(self.available_cameras.index(current_cam_index) + 1)
         self.camera_combo.currentIndexChanged.connect(self.live_update_camera)
         self.general_layout.addWidget(self.camera_combo)
 
@@ -112,7 +115,11 @@ class SettingsDialog(QDialog):
 
     # --- Live Update Handlers ---
     def live_update_camera(self, index):
-        selected_camera_index = self.available_cameras[index]
+        if index == 0:
+            selected_camera_index = -1 # No Video
+        else:
+            selected_camera_index = self.available_cameras[index - 1]
+        
         if self.config.get("camera_index") != selected_camera_index:
             self.config["camera_index"] = selected_camera_index
             self.parent.restart_camera()
@@ -344,6 +351,9 @@ class MagicMirrorApp(QMainWindow):
                 cap.release()
         return available_cameras
 
+    def is_camera_active(self):
+        return self.config.get("camera_index", -1) != -1 and hasattr(self, 'cap') and self.cap.isOpened()
+
     def load_config(self):
         default_config = {
             "camera_index": 0,
@@ -376,12 +386,18 @@ class MagicMirrorApp(QMainWindow):
         if hasattr(self, 'cap') and self.cap.isOpened():
             self.cap.release()
 
+        if camera_index == -1:
+            if hasattr(self, 'timer') and self.timer.isActive():
+                self.timer.stop()
+            self.central_widget.set_pixmap(QPixmap()) # Clear the pixmap
+            return
+
         self.cap = cv2.VideoCapture(camera_index)
         if not self.cap.isOpened():
             self.show_error(f"Error: Could not open camera {camera_index}.")
             return
         
-        if not hasattr(self, 'timer'):
+        if not hasattr(self, 'timer') or not self.timer.isActive():
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_camera_feed)
             self.timer.start(30)
@@ -411,6 +427,10 @@ class MagicMirrorApp(QMainWindow):
         self.edit_button.setFixedSize(40, 40)
 
     def update_camera_feed(self):
+        if not self.is_camera_active():
+            self.central_widget.update()
+            return
+
         ret, frame = self.cap.read()
         if not ret:
             self.central_widget.update()

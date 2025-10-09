@@ -2,32 +2,37 @@
     "camera_index": 0,
     "video_rotation": 0,
     "mirror_video": false,
-    "text_scale_multiplier": 1.0,
+    "text_scale_multiplier": 1.52,
     "feed_refresh_interval_ms": 3600000,
     "widget_positions": {
         "calendar_1": {
-            "x": 0.09739583333333335,
-            "y": 0.07314814814814813,
+            "x": 0.11605902777777778,
+            "y": 0.1001543209876543,
             "anchor": "center"
         },
         "date_1": {
-            "x": 0.1515625,
-            "y": 0.045370370370370394,
+            "x": 0.1767361111111111,
+            "y": 0.07314814814814817,
             "anchor": "center"
         },
         "weatherforecast_1": {
-            "x": 0.9723958333333333,
+            "x": 0.9628472222222222,
             "y": 0.061111111111111116,
             "anchor": "center"
         },
         "rss_1": {
-            "x": 0.24375,
-            "y": 0.6962962962962963,
+            "x": 0.31493055555555555,
+            "y": 0.620679012345679,
             "anchor": "center"
         },
         "rss_2": {
-            "x": 0.2515625,
-            "y": 0.7861111111111111,
+            "x": 0.3344618055555556,
+            "y": 0.7336419753086421,
+            "anchor": "center"
+        },
+        "ical_1": {
+            "x": 0.36197916666666663,
+            "y": 0.11815948601662882,
             "anchor": "center"
         }
     },
@@ -47,6 +52,13 @@
             "urls": [
                 "https://southernillinoisnow.com/feed/"
             ]
+        },
+        "ical_1": {
+            "urls": [
+                "https://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb",
+                "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M"
+            ],
+            "timezone": "US/Central"
         }
     },
     "fullscreen": true
