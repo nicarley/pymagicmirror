@@ -249,6 +249,7 @@ class ICalWidget(BaseWidget):
 
             except Exception as e:
                 print(f"iCal update error for url {url}: {e}")
+                app.after(0, lambda: self.set_text("iCal: Error", app))
         
         all_events.sort(key=lambda x: x[0])
         
@@ -286,6 +287,7 @@ class RssWidget(BaseWidget):
                 all_entries.extend(feed.entries)
             except Exception as e:
                 print(f"RSS update error for url {url}: {e}")
+                app.after(0, lambda: self.set_text("RSS: Error", app))
 
         all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
         final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
