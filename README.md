@@ -1,7 +1,7 @@
 # Magic Mirror
 
 A customizable, modular smart mirror application built with Python and PySide6. This application uses a webcam feed as a dynamic background and overlays a variety of customizable widgets to create a personalized smart mirror experience.
-
+<img src="https://github.com/nicarley/pymagicmirror/blob/master/resources/screenshot.png" width="320px" />
 ## Key Features
 
 *   **Live Video Background:** Uses any connected webcam to create a real-time mirror effect.

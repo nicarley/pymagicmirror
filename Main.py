@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 import cv2
+import pytz
 from widget_manager import WidgetManager, WIDGET_CLASSES
 
 CONFIG_FILE = "config.json"
@@ -173,7 +174,9 @@ class SettingsDialog(QDialog):
         widget_name = f"{widget_type}_{i}"
 
         self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
-        if widget_type in ["ical", "rss"]:
+        if widget_type == "ical":
+            self.config["widget_settings"][widget_name] = {"urls": [], "timezone": "US/Central"}
+        elif widget_type == "rss":
             self.config["widget_settings"][widget_name] = {"urls": []}
         elif widget_type == "weatherforecast":
             self.config["widget_settings"][widget_name] = {"location": "New York, US"}
@@ -222,8 +225,26 @@ class SettingsDialog(QDialog):
             location_entry.setObjectName("location_entry")
             location_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(location_entry)
-        elif widget_type in ["ical", "rss"]:
-            self.widget_settings_layout.addWidget(QLabel(f"{widget_type.upper()} Feed URLs:"))
+        elif widget_type == "ical":
+            self.widget_settings_layout.addWidget(QLabel("Timezone:"))
+            tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
+            tz_combo.addItems(pytz.all_timezones)
+            tz_combo.setCurrentText(settings.get("timezone", "US/Central"))
+            tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(tz_combo)
+
+            self.widget_settings_layout.addWidget(QLabel(f"iCal Feed URLs:"))
+            url_list = QListWidget(); url_list.setObjectName("url_list")
+            url_list.addItems(settings.get("urls", []))
+            self.widget_settings_layout.addWidget(url_list)
+            
+            add_url_button = QPushButton("Add URL"); remove_url_button = QPushButton("Remove Selected URL")
+            add_url_button.clicked.connect(self.add_url)
+            remove_url_button.clicked.connect(self.remove_url)
+            self.widget_settings_layout.addWidget(add_url_button)
+            self.widget_settings_layout.addWidget(remove_url_button)
+        elif widget_type == "rss":
+            self.widget_settings_layout.addWidget(QLabel(f"RSS Feed URLs:"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
             url_list.addItems(settings.get("urls", []))
             self.widget_settings_layout.addWidget(url_list)
@@ -261,7 +282,12 @@ class SettingsDialog(QDialog):
         elif widget_type == "weatherforecast":
             location_entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
             if location_entry: self.config["widget_settings"][widget_name]["location"] = location_entry.text()
-        elif widget_type in ["ical", "rss"]:
+        elif widget_type == "ical":
+            tz_combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if tz_combo: self.config["widget_settings"][widget_name]["timezone"] = tz_combo.currentText()
+            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if url_list: self.config["widget_settings"][widget_name]["urls"] = [url_list.item(i).text() for i in range(url_list.count())]
+        elif widget_type == "rss":
             url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
             if url_list: self.config["widget_settings"][widget_name]["urls"] = [url_list.item(i).text() for i in range(url_list.count())]
         
