@@ -9,6 +9,7 @@ import math
 import feedparser
 from icalendar import Calendar
 import pytz
+import threading
 
 # --- NWS API Helper --- 
 NWS_CACHE = {}
@@ -53,9 +54,18 @@ class BaseWidget:
         return x, y, pos_data['anchor']
 
     def _update_text(self):
+        # This method should be overridden by widgets
+        # For non-threaded widgets, it sets self.text directly.
+        # For threaded widgets, it should return the new text.
         pass
 
+    def set_text(self, new_text, app):
+        self.text = new_text
+        if app and app.central_widget:
+            app.central_widget.update()
+
     def update(self, app):
+        # Default non-threaded update
         self._update_text()
         refresh_interval_ms = self.get_refresh_interval()
         self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
@@ -80,7 +90,7 @@ class BaseWidget:
             "time": {"scale": 3, "thick": 3}, "date": {"scale": 1.2, "thick": 2}, 
             "calendar": {"scale": 0.8, "thick": 1}, 
             "ical": {"scale": 0.8, "thick": 1}, "rss": {"scale": 0.8, "thick": 1},
-            "weatherforecast": {"scale": 0.9, "thick": 1}
+            "weatherforecast": {"scale": 0.9, "thick": 1}, "worldclock": {"scale": 1.5, "thick": 2}
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -103,17 +113,36 @@ class DateWidget(BaseWidget):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app))
 
-class WeatherForecastWidget(BaseWidget):
+class WorldClockWidget(BaseWidget):
     def _update_text(self):
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        timezone_str = widget_settings.get("timezone", "UTC")
+        try:
+            tz = pytz.timezone(timezone_str)
+            now = datetime.now(tz)
+            city = timezone_str.split('/')[-1].replace('_', ' ')
+            self.text = f"{city}\n{now.strftime('%I:%M:%S %p')}"
+        except pytz.exceptions.UnknownTimeZoneError:
+            self.text = f"Unknown Zone:\n{timezone_str}"
+        except Exception as e:
+            self.text = "Clock Error"
+            print(f"WorldClock update error: {e}")
+
+    def update(self, app):
+        self._update_text()
+        self.update_timer = app.after(1000, lambda: self.update(app))
+
+class WeatherForecastWidget(BaseWidget):
+    def _update_text_worker(self, app):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         location = widget_settings.get("location")
         if not location:
-            self.text = "Set Location in Widget Settings"
+            app.after(0, lambda: self.set_text("Set Location in Widget Settings", app))
             return
 
         forecast_url = get_nws_forecast_url(location)
         if not forecast_url:
-            self.text = f"Invalid NWS Location:\n{location}"
+            app.after(0, lambda: self.set_text(f"Invalid NWS Location:\n{location}", app))
             return
         try:
             headers = {'User-Agent': USER_AGENT, 'Accept': 'application/geo+json'}
@@ -122,7 +151,7 @@ class WeatherForecastWidget(BaseWidget):
             
             periods = data.get('properties', {}).get('periods', [])
             if not periods:
-                self.text = f"No forecast data for {location}"
+                app.after(0, lambda: self.set_text(f"No forecast data for {location}", app))
                 return
             
             current_forecast = periods[0]
@@ -140,20 +169,27 @@ class WeatherForecastWidget(BaseWidget):
             
             forecast_lines = []
             sorted_days = sorted(daily_forecasts.keys())
-            for day_str in sorted_days[1:6]: # Start from the next day for 5-day forecast
+            for day_str in sorted_days[1:6]:
                 values = daily_forecasts[day_str]
                 day_name_short = datetime.strptime(day_str, '%Y-%m-%d').strftime('%a')
                 forecast_lines.append(f"{day_name_short}: {values['desc']}, {values['low']}°/{values['high']}°F")
             
             forecast_text = "\n".join(forecast_lines)
-            
-            self.text = f"{current_weather_line}\n\n{forecast_text}"
+            final_text = f"{current_weather_line}\n\n{forecast_text}"
+            app.after(0, lambda: self.set_text(final_text, app))
 
         except requests.exceptions.RequestException:
-            self.text = "Weather: No Connection"
+            app.after(0, lambda: self.set_text("Weather: No Connection", app))
         except Exception as e:
-            self.text = "Weather: Error"
             print(f"WeatherForecast update error: {e}")
+            app.after(0, lambda: self.set_text("Weather: Error", app))
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        refresh_interval_ms = self.get_refresh_interval()
+        self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
 
 class CalendarWidget(BaseWidget):
     def _update_text(self):
@@ -161,18 +197,17 @@ class CalendarWidget(BaseWidget):
         self.text = calendar.month(time.localtime().tm_year, time.localtime().tm_mon)
 
 class ICalWidget(BaseWidget):
-    def _update_text(self):
+    def _update_text_worker(self, app):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         ical_urls = widget_settings.get("urls", [])
         display_tz_str = widget_settings.get("timezone", "UTC")
         try:
             display_tz = pytz.timezone(display_tz_str)
         except pytz.exceptions.UnknownTimeZoneError:
-            print(f"Warning: Unknown timezone '{display_tz_str}' for widget {self.widget_name}. Defaulting to UTC.")
             display_tz = pytz.utc
 
         if not ical_urls:
-            self.text = "Set iCal URLs in widget settings"
+            app.after(0, lambda: self.set_text("Set iCal URLs in widget settings", app))
             return
 
         all_events = []
@@ -202,7 +237,6 @@ class ICalWidget(BaseWidget):
                             event_dt_for_processing = datetime.combine(dtstart_raw, datetime.min.time())
                             is_datetime_event = False
                         else:
-                            print(f"Warning: Skipping event due to unexpected dtstart type: {type(dtstart_raw)}")
                             continue
 
                         if event_dt_for_processing.tzinfo is None:
@@ -225,14 +259,22 @@ class ICalWidget(BaseWidget):
                 event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
             else:
                 event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
-        self.text = "\n".join(event_lines) or "No upcoming events."
+        final_text = "\n".join(event_lines) or "No upcoming events."
+        app.after(0, lambda: self.set_text(final_text, app))
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        refresh_interval_ms = self.get_refresh_interval()
+        self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
 
 class RssWidget(BaseWidget):
-    def _update_text(self):
+    def _update_text_worker(self, app):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         rss_urls = widget_settings.get("urls", [])
         if not rss_urls:
-            self.text = "Set RSS URLs in widget settings"
+            app.after(0, lambda: self.set_text("Set RSS URLs in widget settings", app))
             return
 
         all_entries = []
@@ -246,11 +288,18 @@ class RssWidget(BaseWidget):
                 print(f"RSS update error for url {url}: {e}")
 
         all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
+        final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
+        app.after(0, lambda: self.set_text(final_text, app))
 
-        self.text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        refresh_interval_ms = self.get_refresh_interval()
+        self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
 
 WIDGET_CLASSES = {
-    "time": TimeWidget, "date": DateWidget,
+    "time": TimeWidget, "date": DateWidget, "worldclock": WorldClockWidget,
     "calendar": CalendarWidget, "weatherforecast": WeatherForecastWidget,
     "ical": ICalWidget, "rss": RssWidget
 }

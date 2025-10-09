@@ -134,6 +134,7 @@ class SettingsDialog(QDialog):
 
     def live_update_text_size(self, value):
         self.config["text_scale_multiplier"] = value / 100.0
+        self.parent.central_widget.update()
 
     def live_update_refresh_interval(self, text):
         self.config["feed_refresh_interval_ms"] = self.refresh_intervals[text]
@@ -187,6 +188,8 @@ class SettingsDialog(QDialog):
             self.config["widget_settings"][widget_name] = {"urls": []}
         elif widget_type == "weatherforecast":
             self.config["widget_settings"][widget_name] = {"location": "New York, US"}
+        elif widget_type == "worldclock":
+            self.config["widget_settings"][widget_name] = {"timezone": "UTC"}
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
@@ -226,6 +229,13 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("format", "24h"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(combo)
+        elif widget_type == "worldclock":
+            self.widget_settings_layout.addWidget(QLabel("Timezone:"))
+            tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
+            tz_combo.addItems(pytz.all_timezones)
+            tz_combo.setCurrentText(settings.get("timezone", "UTC"))
+            tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(tz_combo)
         elif widget_type == "weatherforecast":
             self.widget_settings_layout.addWidget(QLabel("Location:"))
             location_entry = QLineEdit(settings.get("location", ""))
@@ -286,6 +296,9 @@ class SettingsDialog(QDialog):
         if widget_type == "time":
             combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
             if combo: self.config["widget_settings"][widget_name]["format"] = combo.currentText()
+        elif widget_type == "worldclock":
+            tz_combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if tz_combo: self.config["widget_settings"][widget_name]["timezone"] = tz_combo.currentText()
         elif widget_type == "weatherforecast":
             location_entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
             if location_entry: self.config["widget_settings"][widget_name]["location"] = location_entry.text()
@@ -387,8 +400,10 @@ class MagicMirrorApp(QMainWindow):
             self.cap.release()
 
         if camera_index == -1:
-            if hasattr(self, 'timer') and self.timer.isActive():
-                self.timer.stop()
+            if not (hasattr(self, 'timer') and self.timer.isActive()):
+                self.timer = QTimer(self)
+                self.timer.timeout.connect(self.update_camera_feed)
+                self.timer.start(30)
             self.central_widget.set_pixmap(QPixmap()) # Clear the pixmap
             return
 
