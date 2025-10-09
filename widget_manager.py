@@ -54,9 +54,6 @@ class BaseWidget:
         return x, y, pos_data['anchor']
 
     def _update_text(self):
-        # This method should be overridden by widgets
-        # For non-threaded widgets, it sets self.text directly.
-        # For threaded widgets, it should return the new text.
         pass
 
     def set_text(self, new_text, app):
@@ -65,13 +62,11 @@ class BaseWidget:
             app.central_widget.update()
 
     def update(self, app):
-        # Default non-threaded update
         self._update_text()
         refresh_interval_ms = self.get_refresh_interval()
         self.update_timer = app.after(refresh_interval_ms, lambda: self.update(app))
 
     def get_refresh_interval(self):
-        # Default to 1 hour
         return self.config.get("feed_refresh_interval_ms", 3600000)
 
     def draw(self, painter, app):
@@ -98,10 +93,7 @@ class TimeWidget(BaseWidget):
     def _update_text(self):
         widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
         time_format = widget_settings.get("format", "24h")
-        if time_format == "12h":
-            self.text = time.strftime('%I:%M:%S %p')
-        else:
-            self.text = time.strftime('%H:%M:%S')
+        self.text = time.strftime('%I:%M:%S %p' if time_format == "12h" else '%H:%M:%S')
     def update(self, app):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app))
@@ -134,17 +126,18 @@ class WorldClockWidget(BaseWidget):
 
 class WeatherForecastWidget(BaseWidget):
     def _update_text_worker(self, app):
-        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-        location = widget_settings.get("location")
-        if not location:
-            app.after(0, lambda: self.set_text("Set Location in Widget Settings", app))
-            return
-
-        forecast_url = get_nws_forecast_url(location)
-        if not forecast_url:
-            app.after(0, lambda: self.set_text(f"Invalid NWS Location:\n{location}", app))
-            return
         try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            location = widget_settings.get("location")
+            if not location:
+                app.after(0, lambda: self.set_text("Set Location in Widget Settings", app))
+                return
+
+            forecast_url = get_nws_forecast_url(location)
+            if not forecast_url:
+                app.after(0, lambda: self.set_text(f"Invalid NWS Location:\n{location}", app))
+                return
+
             headers = {'User-Agent': USER_AGENT, 'Accept': 'application/geo+json'}
             response = requests.get(forecast_url, headers=headers, timeout=10)
             data = response.json()
@@ -198,25 +191,25 @@ class CalendarWidget(BaseWidget):
 
 class ICalWidget(BaseWidget):
     def _update_text_worker(self, app):
-        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-        ical_urls = widget_settings.get("urls", [])
-        display_tz_str = widget_settings.get("timezone", "UTC")
         try:
-            display_tz = pytz.timezone(display_tz_str)
-        except pytz.exceptions.UnknownTimeZoneError:
-            display_tz = pytz.utc
-
-        if not ical_urls:
-            app.after(0, lambda: self.set_text("Set iCal URLs in widget settings", app))
-            return
-
-        all_events = []
-        now = datetime.now(pytz.utc)
-
-        for url in ical_urls:
-            if not url or "YOUR_ICAL_URL_HERE" in url:
-                continue
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            ical_urls = widget_settings.get("urls", [])
+            display_tz_str = widget_settings.get("timezone", "UTC")
             try:
+                display_tz = pytz.timezone(display_tz_str)
+            except pytz.exceptions.UnknownTimeZoneError:
+                display_tz = pytz.utc
+
+            if not ical_urls:
+                app.after(0, lambda: self.set_text("Set iCal URLs in widget settings", app))
+                return
+
+            all_events = []
+            now = datetime.now(pytz.utc)
+
+            for url in ical_urls:
+                if not url or "YOUR_ICAL_URL_HERE" in url:
+                    continue
                 response = requests.get(url, timeout=10)
                 cal = Calendar.from_ical(response.content)
                 for component in cal.walk():
@@ -246,23 +239,22 @@ class ICalWidget(BaseWidget):
 
                         if event_dt_final and event_dt_final >= now:
                             all_events.append((event_dt_final, summary, is_datetime_event))
+            
+            all_events.sort(key=lambda x: x[0])
+            
+            event_lines = []
+            for event_time, summary, is_datetime in all_events[:5]:
+                if is_datetime:
+                    event_time_local = event_time.astimezone(display_tz)
+                    event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
+                else:
+                    event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
+            final_text = "\n".join(event_lines) or "No upcoming events."
+            app.after(0, lambda: self.set_text(final_text, app))
 
-            except Exception as e:
-                print(f"iCal update error for url {url}: {e}")
-                app.after(0, lambda: self.set_text("iCal: Error", app))
-                return
-        
-        all_events.sort(key=lambda x: x[0])
-        
-        event_lines = []
-        for event_time, summary, is_datetime in all_events[:5]:
-            if is_datetime:
-                event_time_local = event_time.astimezone(display_tz)
-                event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
-            else:
-                event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
-        final_text = "\n".join(event_lines) or "No upcoming events."
-        app.after(0, lambda: self.set_text(final_text, app))
+        except Exception as e:
+            print(f"iCal update error: {e}")
+            app.after(0, lambda: self.set_text("iCal: Error", app))
 
     def update(self, app):
         thread = threading.Thread(target=self._update_text_worker, args=(app,))
@@ -273,27 +265,26 @@ class ICalWidget(BaseWidget):
 
 class RssWidget(BaseWidget):
     def _update_text_worker(self, app):
-        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-        rss_urls = widget_settings.get("urls", [])
-        if not rss_urls:
-            app.after(0, lambda: self.set_text("Set RSS URLs in widget settings", app))
-            return
-
-        all_entries = []
-        for url in rss_urls:
-            if not url or "YOUR_RSS_FEED_URL_HERE" in url:
-                continue
-            try:
-                feed = feedparser.parse(url)
-                all_entries.extend(feed.entries)
-            except Exception as e:
-                print(f"RSS update error for url {url}: {e}")
-                app.after(0, lambda: self.set_text("RSS: Error", app))
+        try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            rss_urls = widget_settings.get("urls", [])
+            if not rss_urls:
+                app.after(0, lambda: self.set_text("Set RSS URLs in widget settings", app))
                 return
 
-        all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
-        final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
-        app.after(0, lambda: self.set_text(final_text, app))
+            all_entries = []
+            for url in rss_urls:
+                if not url or "YOUR_RSS_FEED_URL_HERE" in url:
+                    continue
+                feed = feedparser.parse(url)
+                all_entries.extend(feed.entries)
+
+            all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
+            final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
+            app.after(0, lambda: self.set_text(final_text, app))
+        except Exception as e:
+            print(f"RSS update error: {e}")
+            app.after(0, lambda: self.set_text("RSS: Error", app))
 
     def update(self, app):
         thread = threading.Thread(target=self._update_text_worker, args=(app,))
