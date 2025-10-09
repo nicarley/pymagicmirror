@@ -206,50 +206,59 @@ class ICalWidget(BaseWidget):
 
             all_events = []
             now = datetime.now(pytz.utc)
+            had_errors = False
 
             for url in ical_urls:
                 if not url or "YOUR_ICAL_URL_HERE" in url:
                     continue
-                response = requests.get(url, timeout=10)
-                cal = Calendar.from_ical(response.content)
-                for component in cal.walk():
-                    if component.name == "VEVENT":
-                        dtstart_prop = component.get('dtstart')
-                        if not dtstart_prop: continue
-                        
-                        dtstart_raw = dtstart_prop.dt
-                        summary = component.get('summary')
+                try:
+                    response = requests.get(url, timeout=10)
+                    cal = Calendar.from_ical(response.content)
+                    for component in cal.walk():
+                        if component.name == "VEVENT":
+                            dtstart_prop = component.get('dtstart')
+                            if not dtstart_prop: continue
+                            
+                            dtstart_raw = dtstart_prop.dt
+                            summary = component.get('summary')
 
-                        event_dt_final = None
-                        is_datetime_event = False
-
-                        if isinstance(dtstart_raw, datetime):
-                            event_dt_for_processing = dtstart_raw
-                            is_datetime_event = True
-                        elif isinstance(dtstart_raw, date):
-                            event_dt_for_processing = datetime.combine(dtstart_raw, datetime.min.time())
+                            event_dt_final = None
                             is_datetime_event = False
-                        else:
-                            continue
 
-                        if event_dt_for_processing.tzinfo is None:
-                            event_dt_final = pytz.utc.localize(event_dt_for_processing)
-                        else:
-                            event_dt_final = event_dt_for_processing.astimezone(pytz.utc)
+                            if isinstance(dtstart_raw, datetime):
+                                event_dt_for_processing = dtstart_raw
+                                is_datetime_event = True
+                            elif isinstance(dtstart_raw, date):
+                                event_dt_for_processing = datetime.combine(dtstart_raw, datetime.min.time())
+                                is_datetime_event = False
+                            else:
+                                continue
 
-                        if event_dt_final and event_dt_final >= now:
-                            all_events.append((event_dt_final, summary, is_datetime_event))
+                            if event_dt_for_processing.tzinfo is None:
+                                event_dt_final = pytz.utc.localize(event_dt_for_processing)
+                            else:
+                                event_dt_final = event_dt_for_processing.astimezone(pytz.utc)
+
+                            if event_dt_final and event_dt_final >= now:
+                                all_events.append((event_dt_final, summary, is_datetime_event))
+
+                except Exception as e:
+                    print(f"iCal update error for url {url}: {e}")
+                    had_errors = True
             
             all_events.sort(key=lambda x: x[0])
             
-            event_lines = []
-            for event_time, summary, is_datetime in all_events[:5]:
-                if is_datetime:
-                    event_time_local = event_time.astimezone(display_tz)
-                    event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
-                else:
-                    event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
-            final_text = "\n".join(event_lines) or "No upcoming events."
+            if not all_events and had_errors:
+                final_text = "iCal: Error"
+            else:
+                event_lines = []
+                for event_time, summary, is_datetime in all_events[:5]:
+                    if is_datetime:
+                        event_time_local = event_time.astimezone(display_tz)
+                        event_lines.append(f"{event_time_local.strftime('%m/%d %I:%M %p')}: {summary}")
+                    else:
+                        event_lines.append(f"{event_time.strftime('%m/%d')}: {summary}")
+                final_text = "\n".join(event_lines) or "No upcoming events."
             app.after(0, lambda: self.set_text(final_text, app))
 
         except Exception as e:
@@ -273,14 +282,22 @@ class RssWidget(BaseWidget):
                 return
 
             all_entries = []
+            had_errors = False
             for url in rss_urls:
                 if not url or "YOUR_RSS_FEED_URL_HERE" in url:
                     continue
-                feed = feedparser.parse(url)
-                all_entries.extend(feed.entries)
+                try:
+                    feed = feedparser.parse(url)
+                    all_entries.extend(feed.entries)
+                except Exception as e:
+                    print(f"RSS update error for url {url}: {e}")
+                    had_errors = True
 
-            all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
-            final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
+            if not all_entries and had_errors:
+                final_text = "RSS: Error"
+            else:
+                all_entries.sort(key=lambda x: x.get("published_parsed", time.gmtime(0)), reverse=True)
+                final_text = "\n".join([f"• {entry.title}" for entry in all_entries[:5]]) or "No RSS entries."
             app.after(0, lambda: self.set_text(final_text, app))
         except Exception as e:
             print(f"RSS update error: {e}")
