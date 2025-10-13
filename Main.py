@@ -4,7 +4,7 @@ import os
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
-    QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider
+    QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider, QColorDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
@@ -134,6 +134,28 @@ class SettingsDialog(QDialog):
         self.refresh_interval_combo.currentTextChanged.connect(self.live_update_refresh_interval)
         self.general_layout.addWidget(self.refresh_interval_combo)
 
+        self.text_color_button = QPushButton("Text Color")
+        self.text_color_button.clicked.connect(self.open_text_color_picker)
+        self.general_layout.addWidget(self.text_color_button)
+
+        self.shadow_color_button = QPushButton("Text Shadow Color")
+        self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
+        self.general_layout.addWidget(self.shadow_color_button)
+
+    def open_text_color_picker(self):
+        current_color = QColor(*self.config.get("text_color", [255, 255, 255]))
+        color = QColorDialog.getColor(current_color, self)
+        if color.isValid():
+            self.config["text_color"] = [color.red(), color.green(), color.blue()]
+            self.parent.central_widget.update()
+
+    def open_shadow_color_picker(self):
+        current_color = QColor(*self.config.get("text_shadow_color", [0, 0, 0]))
+        color = QColorDialog.getColor(current_color, self)
+        if color.isValid():
+            self.config["text_shadow_color"] = [color.red(), color.green(), color.blue()]
+            self.parent.central_widget.update()
+
     def live_update_camera(self, index):
         if index == 0:
             selected = -1
@@ -210,6 +232,8 @@ class SettingsDialog(QDialog):
             self.config["widget_settings"][widget_name] = {"location": "Salem, IL"}
         elif widget_type == "worldclock":
             self.config["widget_settings"][widget_name] = {"timezone": "UTC"}
+        elif widget_type == "sports":
+            self.config["widget_settings"][widget_name] = {"league": "NFL", "teams": []}
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
@@ -290,6 +314,19 @@ class SettingsDialog(QDialog):
             remove_url_button.clicked.connect(self.remove_url)
             self.widget_settings_layout.addWidget(add_url_button)
             self.widget_settings_layout.addWidget(remove_url_button)
+        elif widget_type == "sports":
+            self.widget_settings_layout.addWidget(QLabel("League"))
+            league_combo = QComboBox(); league_combo.setObjectName("league_combo")
+            league_combo.addItems(["NFL", "NBA", "MLB"])
+            league_combo.setCurrentText(settings.get("league", "NFL"))
+            league_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(league_combo)
+
+            self.widget_settings_layout.addWidget(QLabel("Teams (comma-separated abbreviations)"))
+            teams_entry = QLineEdit(",".join(settings.get("teams", [])))
+            teams_entry.setObjectName("teams_entry")
+            teams_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(teams_entry)
 
     def add_url(self):
         url, ok = QInputDialog.getText(self, "Add URL", "Enter the new URL")
@@ -340,6 +377,13 @@ class SettingsDialog(QDialog):
                 self.config["widget_settings"][widget_name]["urls"] = [
                     url_list.item(i).text() for i in range(url_list.count())
                 ]
+        elif widget_type == "sports":
+            league_combo = self.widget_settings_area.findChild(QComboBox, "league_combo")
+            if league_combo:
+                self.config["widget_settings"][widget_name]["league"] = league_combo.currentText()
+            teams_entry = self.widget_settings_area.findChild(QLineEdit, "teams_entry")
+            if teams_entry:
+                self.config["widget_settings"][widget_name]["teams"] = [team.strip() for team in teams_entry.text().split(",")]
 
         self.parent.widget_manager.restart_updates()
 
@@ -374,7 +418,7 @@ class MagicMirrorApp(QMainWindow):
         self.setWindowTitle("Magic Mirror")
         self.central_widget = VideoLabel(self)
         self.setCentralWidget(self.central_widget)
-        self.central_widget.setAlignment(Qt.AlignCenter)
+        self.central_widget.setAlignment(Qt.AlignLeft)
         self.central_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.central_widget.setMouseTracking(True)
@@ -409,6 +453,8 @@ class MagicMirrorApp(QMainWindow):
             "feed_refresh_interval_ms": 3600000,
             "widget_positions": {},
             "widget_settings": {},
+            "text_color": [255, 255, 255],
+            "text_shadow_color": [0, 0, 0]
         }
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
@@ -544,7 +590,7 @@ class MagicMirrorApp(QMainWindow):
         x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), text_width, text_height)
         return QRect(int(x0), int(y0), int(text_width) + 2, int(text_height) + 2)
 
-    def draw_text(self, painter, text, pos, font_scale, color, **kwargs):
+    def draw_text(self, painter, text, pos, font_scale, **kwargs):
         if not text:
             return
         font = QFont("Helvetica"); font.setPointSizeF(font_scale * 10)
@@ -562,12 +608,10 @@ class MagicMirrorApp(QMainWindow):
             line_y = y + i * (metrics.height() + 5)
             line_width = metrics.horizontalAdvance(line)
             line_x = x
-            if "w" not in anchor and "e" not in anchor:
-                line_x = x + (max_width - line_width) / 2
             baseline_y = line_y + metrics.ascent()
-            painter.setPen(QColor(0, 0, 0))
+            painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
             painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
-            painter.setPen(QColor(*color))
+            painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
             painter.drawText(QPoint(int(line_x), int(baseline_y)), line)
 
     def central_widget_mouse_press(self, event):

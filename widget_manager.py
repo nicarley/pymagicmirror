@@ -14,8 +14,15 @@ import threading
 import certifi
 
 # shared network session with retries and a real UA
-USER_AGENT = "MagicMirrorApp/1.0 (nic.farley@salemil.us)"
+USER_AGENT = "MagicMirrorApp/2025.1013"
 NWS_CACHE = {}
+
+# Using the free, public ESPN APIs
+API_URLS = {
+    "nfl": "http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+    "nba": "http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "mlb": "http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
+}
 
 def make_session():
     s = requests.Session()
@@ -123,7 +130,6 @@ class BaseWidget:
             self.text,
             (x, y),
             final_scale,
-            (255, 255, 255),
             thickness=self.params["thick"],
             anchor=anchor,
         )
@@ -138,6 +144,7 @@ class BaseWidget:
             "rss": {"scale": 0.8, "thick": 1},
             "weatherforecast": {"scale": 0.9, "thick": 1},
             "worldclock": {"scale": 1.5, "thick": 2},
+            "sports": {"scale": 0.9, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -377,6 +384,100 @@ class RssWidget(BaseWidget):
         thread.start()
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
+class SportsWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            league = widget_settings.get("league", "nfl")
+            teams = [team.lower() for team in widget_settings.get("teams", [])]
+            
+            url = API_URLS.get(league.lower())
+            if not url:
+                self.set_error("unknown league", app, f"Unknown league: {league}")
+                return
+
+            response = SESSION.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            formatted_scores = self.format_scores(data, league, teams)
+            self.mark_updated()
+            self.set_text(formatted_scores, app)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Sports widget error: {e}")
+            self.set_error("network", app, "Sports  No Connection")
+        except Exception as e:
+            print(f"Sports widget update error: {e}")
+            self.set_error("error", app, "Sports  Error")
+
+    def format_scores(self, data, league, teams):
+        output = []
+        events = data.get("events", [])
+        
+        if teams and teams != ['']:
+            filtered_events = []
+            for event in events:
+                for competition in event.get("competitions", []):
+                    for competitor in competition.get("competitors", []):
+                        if competitor.get("team", {}).get("abbreviation", "").lower() in teams:
+                            filtered_events.append(event)
+                            break
+                    else:
+                        continue
+                    break
+            events = filtered_events
+
+        if not events:
+            return f"No {league.upper()} games today."
+
+        for event in events:
+            game_info = self.parse_event(event)
+            if game_info:
+                output.append(game_info)
+        
+        return "\n".join(output) if output else f"No {league.upper()} games for selected teams."
+
+    def parse_event(self, event):
+        competitions = event.get("competitions", [])
+        if not competitions:
+            return None
+            
+        competition = competitions[0]
+        status = competition.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
+        
+        competitors = competition.get("competitors", [])
+        if len(competitors) != 2:
+            return None
+
+        team1 = competitors[0].get("team", {})
+        team2 = competitors[1].get("team", {})
+        
+        score1 = competitors[0].get("score", "0")
+        score2 = competitors[1].get("score", "0")
+
+        team1_name = team1.get("abbreviation", "TBD")
+        team2_name = team2.get("abbreviation", "TBD")
+
+        if status == "STATUS_FINAL":
+            return f"{team1_name} {score1} - {team2_name} {score2} (Final)"
+        elif status == "STATUS_IN_PROGRESS":
+            detail = competition.get("status", {}).get("type", {}).get("detail", "In Progress")
+            return f"{team1_name} {score1} - {team2_name} {score2} ({detail})"
+        elif status == "STATUS_SCHEDULED":
+            game_time_utc = datetime.fromisoformat(competition.get("date").replace("Z", "+00:00"))
+            # This is a naive conversion, doesn't account for user's timezone from config
+            game_time_local = game_time_utc.astimezone(pytz.utc).strftime("%I:%M %p UTC")
+            return f"{team1_name} vs {team2_name} at {game_time_local}"
+        
+        return None
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -385,6 +486,7 @@ WIDGET_CLASSES = {
     "weatherforecast": WeatherForecastWidget,
     "ical": ICalWidget,
     "rss": RssWidget,
+    "sports": SportsWidget,
 }
 
 class WidgetManager:
