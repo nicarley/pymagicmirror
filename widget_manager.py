@@ -12,17 +12,23 @@ from icalendar import Calendar
 import pytz
 import threading
 import certifi
+import os
 
 # shared network session with retries and a real UA
 USER_AGENT = "MagicMirrorApp/2025.1013"
 NWS_CACHE = {}
 
 # Using the free, public ESPN APIs
-API_URLS = {
+SPORTS_API_URLS = {
     "nfl": "http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
     "nba": "http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
     "mlb": "http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
 }
+
+HISTORY_API_URL = "http://history.muffinlabs.com/date"
+
+FMP_API_KEY = os.environ.get("FMP_API_KEY") 
+FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/quote/"
 
 def make_session():
     s = requests.Session()
@@ -130,7 +136,6 @@ class BaseWidget:
             self.text,
             (x, y),
             final_scale,
-            thickness=self.params["thick"],
             anchor=anchor,
         )
 
@@ -145,6 +150,8 @@ class BaseWidget:
             "weatherforecast": {"scale": 0.9, "thick": 1},
             "worldclock": {"scale": 1.5, "thick": 2},
             "sports": {"scale": 0.9, "thick": 1},
+            "stock": {"scale": 0.9, "thick": 1},
+            "history": {"scale": 0.8, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -391,7 +398,7 @@ class SportsWidget(BaseWidget):
             league = widget_settings.get("league", "nfl")
             teams = [team.lower() for team in widget_settings.get("teams", [])]
             
-            url = API_URLS.get(league.lower())
+            url = SPORTS_API_URLS.get(league.lower())
             if not url:
                 self.set_error("unknown league", app, f"Unknown league: {league}")
                 return
@@ -478,6 +485,78 @@ class SportsWidget(BaseWidget):
         thread.start()
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
+class StockWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            symbols = widget_settings.get("symbols", ["AAPL", "GOOG"])
+            api_key = self.config.get("FMP_API_KEY", FMP_API_KEY)
+
+            if not api_key or api_key == "YOUR_FMP_API_KEY":
+                self.set_error("api_key", app, "Stock Widget: API Key Needed")
+                return
+
+            stock_data = []
+            for symbol in symbols:
+                if not symbol.strip():
+                    continue
+                url = f"{FMP_BASE_URL}{symbol.strip().upper()}?apikey={api_key}"
+                response = SESSION.get(url)
+                response.raise_for_status()
+                data = response.json()
+                if data:
+                    price = data[0].get("price", 0)
+                    change = data[0].get("changesPercentage", 0)
+                    change_str = f"+{change:.2f}%" if change > 0 else f"{change:.2f}%"
+                    stock_data.append(f"{symbol.upper()}: ${price:.2f} ({change_str})")
+            
+            if stock_data:
+                self.mark_updated()
+                self.set_text("\n".join(stock_data), app)
+            else:
+                self.set_error("no_data", app, "No stock data found.")
+
+        except requests.exceptions.RequestException as e:
+            print(f"Stock widget error: {e}")
+            self.set_error("network", app, "Stocks  No Connection")
+        except Exception as e:
+            print(f"Stock widget update error: {e}")
+            self.set_error("error", app, "Stocks  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class HistoryWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            response = SESSION.get(HISTORY_API_URL)
+            response.raise_for_status()
+            data = response.json()
+
+            events = data.get("data", {}).get("Events", [])
+            if events:
+                event_texts = [f"{e['year']}: {e['text']}" for e in events[:3]]
+                self.mark_updated()
+                self.set_text("On This Day:\n" + "\n".join(event_texts), app)
+            else:
+                self.set_error("no_events", app, "No historical events found.")
+
+        except requests.exceptions.RequestException as e:
+            print(f"History widget error: {e}")
+            self.set_error("network", app, "History  No Connection")
+        except Exception as e:
+            print(f"History widget update error: {e}")
+            self.set_error("error", app, "History  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -487,6 +566,8 @@ WIDGET_CLASSES = {
     "ical": ICalWidget,
     "rss": RssWidget,
     "sports": SportsWidget,
+    "stock": StockWidget,
+    "history": HistoryWidget,
 }
 
 class WidgetManager:
