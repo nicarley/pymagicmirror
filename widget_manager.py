@@ -377,6 +377,7 @@ class RssWidget(BaseWidget):
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             rss_urls = widget_settings.get("urls", [])
             title = widget_settings.get("title", "")
+            style = widget_settings.get("style", "Normal")
 
             if not rss_urls:
                 self.set_error("no urls", app, "Set RSS URLs in widget settings")
@@ -408,6 +409,14 @@ class RssWidget(BaseWidget):
 
             titles = [f"• {getattr(e, 'title', '(untitled)')}" for e in entries[:5]]
             
+            if style == "Ticker":
+                ticker_text = "   |   ".join([getattr(e, 'title', '(untitled)') for e in entries[:10]])
+                if title:
+                    ticker_text = f"{title}: {ticker_text}"
+                self.mark_updated()
+                self.set_text(ticker_text, app)
+                return
+
             full_text = "\n".join(titles) or "No RSS entries."
             if title:
                 full_text = f"{title}\n{full_text}"
@@ -431,6 +440,7 @@ class SportsWidget(BaseWidget):
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             league_configs = widget_settings.get("configs", [])
             display_tz_str = widget_settings.get("timezone", "UTC")
+            style = widget_settings.get("style", "Normal")
             
             try:
                 display_tz = pytz.timezone(display_tz_str)
@@ -444,6 +454,7 @@ class SportsWidget(BaseWidget):
                 return
 
             all_scores_text = []
+            ticker_items = []
             had_errors = False
 
             for config in league_configs:
@@ -462,11 +473,31 @@ class SportsWidget(BaseWidget):
                     data = response.json()
                     
                     header = league.upper()
-                    formatted_scores = self.format_scores(data, league, teams, display_tz)
                     
-                    if formatted_scores and "No " not in formatted_scores:
-                        all_scores_text.append(f"--- {header} ---")
-                        all_scores_text.append(formatted_scores)
+                    if style == "Ticker":
+                        events = data.get("events", [])
+                        if teams and teams != ['']:
+                            filtered_events = []
+                            for event in events:
+                                for competition in event.get("competitions", []):
+                                    for competitor in competition.get("competitors", []):
+                                        if competitor.get("team", {}).get("abbreviation", "").lower() in teams:
+                                            filtered_events.append(event)
+                                            break
+                                    else:
+                                        continue
+                                    break
+                            events = filtered_events
+                        
+                        for event in events:
+                            game_info = self.parse_event(event, display_tz)
+                            if game_info:
+                                ticker_items.append(f"{header}: {game_info}")
+                    else:
+                        formatted_scores = self.format_scores(data, league, teams, display_tz)
+                        if formatted_scores and "No " not in formatted_scores:
+                            all_scores_text.append(f"--- {header} ---")
+                            all_scores_text.append(formatted_scores)
 
                 except requests.exceptions.RequestException:
                     had_errors = True
@@ -474,6 +505,14 @@ class SportsWidget(BaseWidget):
                 except Exception as e:
                     had_errors = True
                     print(f"Sports widget update error for {league}: {e}")
+
+            if style == "Ticker":
+                if not ticker_items and had_errors:
+                     self.set_error("network", app, "Sports Error")
+                else:
+                    self.mark_updated()
+                    self.set_text("\n".join(ticker_items) or "No games.", app)
+                return
 
             if not all_scores_text and had_errors:
                 self.set_error("network", app, "Sports Error")
@@ -557,6 +596,7 @@ class StockWidget(BaseWidget):
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             symbols = widget_settings.get("symbols", ["AAPL", "GOOG"])
             api_key = self.config.get("FMP_API_KEY", FMP_API_KEY)
+            style = widget_settings.get("style", "Normal")
 
             if not api_key or api_key == "YOUR_FMP_API_KEY":
                 self.set_error("api_key", app, "Stock Widget: API Key Needed")
@@ -578,7 +618,10 @@ class StockWidget(BaseWidget):
             
             if stock_data:
                 self.mark_updated()
-                self.set_text("\n".join(stock_data), app)
+                if style == "Ticker":
+                    self.set_text("\n".join(stock_data), app) # Ticker logic handles joining with separators
+                else:
+                    self.set_text("\n".join(stock_data), app)
             else:
                 self.set_error("no_data", app, "No stock data found.")
 

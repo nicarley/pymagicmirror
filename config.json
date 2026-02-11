@@ -36,8 +36,8 @@
             "anchor": "center"
         },
         "rss_1": {
-            "x": 0.27100694444444445,
-            "y": 0.5410493827160494,
+            "x": 0.2704861111111111,
+            "y": 0.5540123456790124,
             "anchor": "center"
         },
         "ical_1": {
@@ -46,8 +46,8 @@
             "anchor": "center"
         },
         "rss_3": {
-            "x": 0.35095486111111107,
-            "y": 0.6671296296296295,
+            "x": 0.3478298611111111,
+            "y": 0.6884259259259258,
             "anchor": "center"
         },
         "rss_2": {
@@ -142,19 +142,11 @@
                     "teams": []
                 },
                 {
-                    "league": "NFL",
-                    "teams": []
-                },
-                {
                     "league": "NHL",
                     "teams": []
                 },
                 {
                     "league": "NBA",
-                    "teams": []
-                },
-                {
-                    "league": "MLB",
                     "teams": []
                 }
             ],
@@ -168,7 +160,8 @@
         "countdown_2": {
             "name": "Kendra's Birthday",
             "datetime": "2026-08-13 00:00"
-        }
+        },
+        "rss_4": {}
     },
     "fullscreen": true,
     "text_color": [
@@ -182,6 +175,6 @@
         0
     ],
     "FMP_API_KEY": "YOUR_FMP_API_KEY",
-    "font_family": "Yu Gothic UI",
+    "font_family": "Segoe UI Variable",
     "background_opacity": 0.0
 }

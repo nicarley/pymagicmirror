@@ -267,7 +267,7 @@ class SettingsDialog(QDialog):
         elif widget_type == "sports":
             self.config["widget_settings"][widget_name] = {"configs": [], "style": "Normal", "timezone": "UTC"}
         elif widget_type == "stock":
-            self.config["widget_settings"][widget_name] = {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", "")}
+            self.config["widget_settings"][widget_name] = {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"}
         elif widget_type == "date":
             self.config["widget_settings"][widget_name] = {"format": "%A, %B %d, %Y"}
         elif widget_type == "history":
@@ -403,6 +403,13 @@ class SettingsDialog(QDialog):
             symbols_entry.setObjectName("symbols_entry")
             symbols_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(symbols_entry)
+
+            self.widget_settings_layout.addWidget(QLabel("Display Style"))
+            style_combo = QComboBox(); style_combo.setObjectName("style_combo")
+            style_combo.addItems(["Normal", "Ticker"])
+            style_combo.setCurrentText(settings.get("style", "Normal"))
+            style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(style_combo)
         elif widget_type == "countdown":
             self.widget_settings_layout.addWidget(QLabel("Event Name"))
             name_entry = QLineEdit(settings.get("name", "New Event"))
@@ -574,6 +581,10 @@ class SettingsDialog(QDialog):
             symbols_entry = self.widget_settings_area.findChild(QLineEdit, "symbols_entry")
             if symbols_entry:
                 self.config["widget_settings"][widget_name]["symbols"] = [s.strip() for s in symbols_entry.text().split(",")]
+            
+            style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if style_combo:
+                self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
         elif widget_type == "countdown":
             name_entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
             if name_entry:
