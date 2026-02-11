@@ -1,65 +1,187 @@
 {
-    "camera_index": 0,
+    "camera_index": -1,
     "video_rotation": 0,
-    "mirror_video": false,
-    "text_scale_multiplier": 1.52,
+    "mirror_video": true,
+    "text_scale_multiplier": 1.22,
     "feed_refresh_interval_ms": 3600000,
     "widget_positions": {
         "calendar_1": {
-            "x": 0.11605902777777778,
-            "y": 0.1001543209876543,
+            "x": 0.14939236111111112,
+            "y": 0.10663580246913577,
             "anchor": "center"
         },
         "date_1": {
-            "x": 0.1767361111111111,
-            "y": 0.07314814814814817,
+            "x": 0.1771701388888889,
+            "y": 0.06543209876543213,
+            "anchor": "center"
+        },
+        "time_1": {
+            "x": 0.16961805555555565,
+            "y": 0.0007716049382715945,
+            "anchor": "center"
+        },
+        "worldclock_1": {
+            "x": 0.26953125,
+            "y": 0.0050925925925925375,
+            "anchor": "center"
+        },
+        "worldclock_2": {
+            "x": 0.33819444444444446,
+            "y": 0.004564475278053169,
             "anchor": "center"
         },
         "weatherforecast_1": {
-            "x": 0.9628472222222222,
-            "y": 0.061111111111111116,
+            "x": 0.9380208333333333,
+            "y": 0.02283950617283951,
             "anchor": "center"
         },
         "rss_1": {
-            "x": 0.31493055555555555,
-            "y": 0.620679012345679,
-            "anchor": "center"
-        },
-        "rss_2": {
-            "x": 0.3344618055555556,
-            "y": 0.7336419753086421,
+            "x": 0.27100694444444445,
+            "y": 0.5410493827160494,
             "anchor": "center"
         },
         "ical_1": {
-            "x": 0.36197916666666663,
-            "y": 0.11815948601662882,
+            "x": 0.34105902777777775,
+            "y": 0.12716049382716046,
+            "anchor": "center"
+        },
+        "rss_3": {
+            "x": 0.35095486111111107,
+            "y": 0.6671296296296295,
+            "anchor": "center"
+        },
+        "rss_2": {
+            "x": 0.2984375,
+            "y": 0.4222222222222222,
+            "anchor": "center"
+        },
+        "worldclock_3": {
+            "x": 0.40520833333333334,
+            "y": 0.005450941526263631,
+            "anchor": "center"
+        },
+        "history_1": {
+            "x": 0.6015624999999999,
+            "y": 0.31574074074074077,
+            "anchor": "center"
+        },
+        "sports_1": {
+            "x": 0.9072916666666666,
+            "y": 0.8472222222222222,
+            "anchor": "center"
+        },
+        "countdown_1": {
+            "x": 0.8338541666666667,
+            "y": 0.2657407407407407,
+            "anchor": "center"
+        },
+        "countdown_2": {
+            "x": 0.8578125,
+            "y": 0.36018518518518516,
             "anchor": "center"
         }
     },
     "widget_settings": {
         "calendar_1": {},
-        "date_1": {},
+        "date_1": {
+            "format": "%A, %B %d, %Y"
+        },
         "forecast_2": {},
+        "time_1": {
+            "format": "12h"
+        },
+        "worldclock_1": {
+            "timezone": "US/Arizona"
+        },
+        "worldclock_2": {
+            "timezone": "US/Eastern"
+        },
         "weatherforecast_1": {
-            "location": "Salem, IL, USA"
-        },
-        "rss_1": {
-            "urls": [
-                "https://feeds.nbcnews.com/msnbc/public/news"
-            ]
-        },
-        "rss_2": {
-            "urls": [
-                "https://southernillinoisnow.com/feed/"
-            ]
+            "location": "Salem, IL"
         },
         "ical_1": {
             "urls": [
-                "https://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb",
-                "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M"
+                "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M",
+                "https://outlook.office365.com/owa/calendar/3406d02feb504fe9a2ab89aa873ddc15@americana.com/13e7018c97a447d7894384e833d4365d13221565013192611009/calendar.ics"
             ],
             "timezone": "US/Central"
+        },
+        "rss_1": {
+            "urls": [
+                "https://southernillinoisnow.com/feed/"
+            ],
+            "style": "Normal",
+            "title": "WJBD"
+        },
+        "calendar_2": {},
+        "rss_3": {
+            "urls": [
+                "https://feeds.nbcnews.com/nbcnews/public/news"
+            ],
+            "title": "NBC News",
+            "style": "Normal"
+        },
+        "rss_2": {
+            "urls": [
+                "https://feeds.npr.org/1001/rss.xml"
+            ],
+            "title": "NPR",
+            "style": "Normal"
+        },
+        "worldclock_3": {
+            "timezone": "UTC"
+        },
+        "history_1": {},
+        "stock_1": {},
+        "sports_3": {},
+        "sports_2": {},
+        "sports_1": {
+            "configs": [
+                {
+                    "league": "NCAAMB",
+                    "teams": []
+                },
+                {
+                    "league": "NFL",
+                    "teams": []
+                },
+                {
+                    "league": "NHL",
+                    "teams": []
+                },
+                {
+                    "league": "NBA",
+                    "teams": []
+                },
+                {
+                    "league": "MLB",
+                    "teams": []
+                }
+            ],
+            "style": "Ticker",
+            "timezone": "US/Central"
+        },
+        "countdown_1": {
+            "name": "My Birthday",
+            "datetime": "2026-07-01 00:00"
+        },
+        "countdown_2": {
+            "name": "Kendra's Birthday",
+            "datetime": "2026-08-13 00:00"
         }
     },
-    "fullscreen": true
+    "fullscreen": true,
+    "text_color": [
+        255,
+        255,
+        255
+    ],
+    "text_shadow_color": [
+        0,
+        0,
+        0
+    ],
+    "FMP_API_KEY": "YOUR_FMP_API_KEY",
+    "font_family": "Yu Gothic UI",
+    "background_opacity": 0.0
 }

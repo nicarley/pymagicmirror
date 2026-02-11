@@ -3,7 +3,7 @@ import calendar
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import cv2
 import numpy as np
 import math
@@ -22,7 +22,10 @@ NWS_CACHE = {}
 SPORTS_API_URLS = {
     "nfl": "http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
     "nba": "http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
-    "mlb": "http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
+    "mlb": "http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+    "nhl": "http://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
+    "ncaaf": "http://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+    "ncaamb": "http://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
 }
 
 HISTORY_API_URL = "http://history.muffinlabs.com/date"
@@ -88,6 +91,7 @@ class BaseWidget:
         self.update_timer = None
         self.last_error = ""
         self.last_updated = None
+        self.ticker_scroll_x = 0
 
     def get_position(self, win_width, win_height):
         pos_data = self.config["widget_positions"].get(self.widget_name)
@@ -95,7 +99,7 @@ class BaseWidget:
             return 0, 0, "nw"
         x = int(pos_data["x"] * win_width)
         y = int(pos_data["y"] * win_height)
-        return x, y, pos_data["anchor"]
+        return x, y, pos_data.get("anchor", "nw")
 
     def _update_text(self):
         pass
@@ -106,7 +110,16 @@ class BaseWidget:
         return core_text
 
     def set_text(self, new_text, app):
-        self.text = self._decorate_text(new_text)
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        is_ticker = widget_settings.get("style") == "Ticker"
+        
+        decorated_text = self._decorate_text(new_text)
+
+        if is_ticker:
+            self.text = "   |   ".join(decorated_text.split("\n")).strip()
+        else:
+            self.text = decorated_text
+
         if app and app.central_widget:
             app.central_widget.update()
 
@@ -136,7 +149,9 @@ class BaseWidget:
             self.text,
             (x, y),
             final_scale,
+            thickness=self.params["thick"],
             anchor=anchor,
+            widget_name=self.widget_name
         )
 
     def get_draw_params(self):
@@ -152,6 +167,7 @@ class BaseWidget:
             "sports": {"scale": 0.9, "thick": 1},
             "stock": {"scale": 0.9, "thick": 1},
             "history": {"scale": 0.8, "thick": 1},
+            "countdown": {"scale": 1.5, "thick": 2},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -167,8 +183,10 @@ class TimeWidget(BaseWidget):
 
 class DateWidget(BaseWidget):
     def _update_text(self):
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        date_format = widget_settings.get("format", "%A, %B %d, %Y")
         self.mark_updated()
-        self.text = self._decorate_text(time.strftime("%A, %B %d, %Y"))
+        self.text = self._decorate_text(time.strftime(date_format))
     def update(self, app):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app))
@@ -197,6 +215,7 @@ class WeatherForecastWidget(BaseWidget):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             location = widget_settings.get("location") or "Salem, IL"
+            style = widget_settings.get("style", "Normal")
 
             forecast_url = get_nws_forecast_url(location)
             if not forecast_url:
@@ -209,6 +228,14 @@ class WeatherForecastWidget(BaseWidget):
             periods = data.get("properties", {}).get("periods", [])
             if not periods:
                 self.set_error("no periods", app, f"No forecast data for {location}")
+                return
+
+            if style == "Ticker":
+                ticker_items = []
+                for p in periods[:5]:
+                    ticker_items.append(f"{p['name']}: {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}")
+                self.mark_updated()
+                self.set_text("\n".join(ticker_items), app)
                 return
 
             current_forecast = periods[0]
@@ -349,6 +376,8 @@ class RssWidget(BaseWidget):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             rss_urls = widget_settings.get("urls", [])
+            title = widget_settings.get("title", "")
+
             if not rss_urls:
                 self.set_error("no urls", app, "Set RSS URLs in widget settings")
                 return
@@ -378,8 +407,13 @@ class RssWidget(BaseWidget):
             entries.sort(key=_pub, reverse=True)
 
             titles = [f"• {getattr(e, 'title', '(untitled)')}" for e in entries[:5]]
+            
+            full_text = "\n".join(titles) or "No RSS entries."
+            if title:
+                full_text = f"{title}\n{full_text}"
+
             self.mark_updated()
-            self.set_text("\n".join(titles) or "No RSS entries.", app)
+            self.set_text(full_text, app)
 
         except Exception as e:
             print(f"RSS update error: {e}")
@@ -395,30 +429,63 @@ class SportsWidget(BaseWidget):
     def _update_text_worker(self, app):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-            league = widget_settings.get("league", "nfl")
-            teams = [team.lower() for team in widget_settings.get("teams", [])]
+            league_configs = widget_settings.get("configs", [])
+            display_tz_str = widget_settings.get("timezone", "UTC")
             
-            url = SPORTS_API_URLS.get(league.lower())
-            if not url:
-                self.set_error("unknown league", app, f"Unknown league: {league}")
+            try:
+                display_tz = pytz.timezone(display_tz_str)
+            except pytz.exceptions.UnknownTimeZoneError:
+                display_tz = pytz.utc
+                self.set_error("unknown timezone", app, f"Unknown Zone:\n{display_tz_str}")
                 return
 
-            response = SESSION.get(url)
-            response.raise_for_status()
-            data = response.json()
-            
-            formatted_scores = self.format_scores(data, league, teams)
-            self.mark_updated()
-            self.set_text(formatted_scores, app)
+            if not league_configs:
+                self.set_text("No leagues configured for this widget.", app)
+                return
 
-        except requests.exceptions.RequestException as e:
-            print(f"Sports widget error: {e}")
-            self.set_error("network", app, "Sports  No Connection")
+            all_scores_text = []
+            had_errors = False
+
+            for config in league_configs:
+                league = config.get("league", "").lower()
+                teams = [team.lower() for team in config.get("teams", [])]
+                
+                url = SPORTS_API_URLS.get(league)
+                if not url:
+                    all_scores_text.append(f"Unknown league: {league.upper()}")
+                    had_errors = True
+                    continue
+
+                try:
+                    response = SESSION.get(url)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    header = league.upper()
+                    formatted_scores = self.format_scores(data, league, teams, display_tz)
+                    
+                    if formatted_scores and "No " not in formatted_scores:
+                        all_scores_text.append(f"--- {header} ---")
+                        all_scores_text.append(formatted_scores)
+
+                except requests.exceptions.RequestException:
+                    had_errors = True
+                    print(f"Sports widget network error for {league}")
+                except Exception as e:
+                    had_errors = True
+                    print(f"Sports widget update error for {league}: {e}")
+
+            if not all_scores_text and had_errors:
+                self.set_error("network", app, "Sports Error")
+            
+            self.mark_updated()
+            self.set_text("\n".join(all_scores_text) or "No games for selected leagues/teams.", app)
+
         except Exception as e:
             print(f"Sports widget update error: {e}")
-            self.set_error("error", app, "Sports  Error")
+            self.set_error("error", app, "Sports Error")
 
-    def format_scores(self, data, league, teams):
+    def format_scores(self, data, league, teams, display_tz):
         output = []
         events = data.get("events", [])
         
@@ -439,13 +506,13 @@ class SportsWidget(BaseWidget):
             return f"No {league.upper()} games today."
 
         for event in events:
-            game_info = self.parse_event(event)
+            game_info = self.parse_event(event, display_tz)
             if game_info:
                 output.append(game_info)
         
         return "\n".join(output) if output else f"No {league.upper()} games for selected teams."
 
-    def parse_event(self, event):
+    def parse_event(self, event, display_tz):
         competitions = event.get("competitions", [])
         if not competitions:
             return None
@@ -473,8 +540,7 @@ class SportsWidget(BaseWidget):
             return f"{team1_name} {score1} - {team2_name} {score2} ({detail})"
         elif status == "STATUS_SCHEDULED":
             game_time_utc = datetime.fromisoformat(competition.get("date").replace("Z", "+00:00"))
-            # This is a naive conversion, doesn't account for user's timezone from config
-            game_time_local = game_time_utc.astimezone(pytz.utc).strftime("%I:%M %p UTC")
+            game_time_local = game_time_utc.astimezone(display_tz).strftime("%I:%M %p %Z")
             return f"{team1_name} vs {team2_name} at {game_time_local}"
         
         return None
@@ -557,6 +623,40 @@ class HistoryWidget(BaseWidget):
         thread.start()
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
+class CountdownWidget(BaseWidget):
+    def _update_text(self):
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        name = widget_settings.get("name", "Countdown")
+        target_str = widget_settings.get("datetime", "")
+
+        if not target_str:
+            self.text = f"{name}\nSet date and time"
+            return
+
+        try:
+            target_dt = datetime.strptime(target_str, "%Y-%m-%d %H:%M")
+            now = datetime.now()
+            
+            if now > target_dt:
+                self.text = f"{name}\nTime's up!"
+                return
+
+            delta = target_dt - now
+            days = delta.days
+            hours, remainder = divmod(delta.seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+
+            self.text = f"{name}\n{days}d {hours}h {minutes}m"
+
+        except ValueError:
+            self.text = f"{name}\nInvalid date format"
+        except Exception as e:
+            self.text = f"{name}\nError: {e}"
+
+    def update(self, app):
+        self._update_text()
+        self.update_timer = app.after(1000, lambda: self.update(app)) # Update every second
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -568,6 +668,7 @@ WIDGET_CLASSES = {
     "sports": SportsWidget,
     "stock": StockWidget,
     "history": HistoryWidget,
+    "countdown": CountdownWidget,
 }
 
 class WidgetManager:
