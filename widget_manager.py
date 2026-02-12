@@ -13,6 +13,13 @@ import pytz
 import threading
 import certifi
 import os
+import random
+
+# Try to import psutil for system stats
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 # shared network session with retries and a real UA
 USER_AGENT = "MagicMirrorApp/2025.1013"
@@ -32,6 +39,36 @@ HISTORY_API_URL = "http://history.muffinlabs.com/date"
 
 FMP_API_KEY = os.environ.get("FMP_API_KEY") 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/quote/"
+
+WEATHER_EMOJI_MAP = {
+    "Sunny": "☀️",
+    "Clear": "☀️",
+    "Mostly Sunny": "🌤️",
+    "Partly Cloudy": "⛅",
+    "Mostly Cloudy": "🌥️",
+    "Cloudy": "☁️",
+    "Overcast": "☁️",
+    "Rain": "🌧️",
+    "Light Rain": "🌦️",
+    "Showers": "🌧️",
+    "Thunderstorm": "⛈️",
+    "Snow": "❄️",
+    "Fog": "🌫️",
+    "Mist": "🌫️",
+    "Haze": "🌫️",
+    "Windy": "💨",
+}
+
+DEFAULT_QUOTES = [
+    "Believe you can and you're halfway there.",
+    "You look great today!",
+    "Make it a great day.",
+    "The best way to predict the future is to create it.",
+    "Do something today that your future self will thank you for.",
+    "Smile, it confuses people.",
+    "You are enough.",
+    "Carpe Diem.",
+]
 
 def make_session():
     s = requests.Session()
@@ -168,6 +205,8 @@ class BaseWidget:
             "stock": {"scale": 0.9, "thick": 1},
             "history": {"scale": 0.8, "thick": 1},
             "countdown": {"scale": 1.5, "thick": 2},
+            "quotes": {"scale": 1.0, "thick": 1},
+            "system": {"scale": 0.8, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -211,6 +250,12 @@ class WorldClockWidget(BaseWidget):
         self.update_timer = app.after(1000, lambda: self.update(app))
 
 class WeatherForecastWidget(BaseWidget):
+    def _get_emoji(self, desc):
+        for key, emoji in WEATHER_EMOJI_MAP.items():
+            if key.lower() in desc.lower():
+                return emoji
+        return ""
+
     def _update_text_worker(self, app):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
@@ -233,13 +278,15 @@ class WeatherForecastWidget(BaseWidget):
             if style == "Ticker":
                 ticker_items = []
                 for p in periods[:5]:
-                    ticker_items.append(f"{p['name']}: {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}")
+                    emoji = self._get_emoji(p['shortForecast'])
+                    ticker_items.append(f"{p['name']}: {emoji} {p['shortForecast']}, {p['temperature']}°{p['temperatureUnit']}")
                 self.mark_updated()
                 self.set_text("\n".join(ticker_items), app)
                 return
 
             current_forecast = periods[0]
-            current_line = f"{location}\n{current_forecast['temperature']}°{current_forecast['temperatureUnit']}, {current_forecast['shortForecast']}"
+            curr_emoji = self._get_emoji(current_forecast['shortForecast'])
+            current_line = f"{location}\n{curr_emoji} {current_forecast['temperature']}°{current_forecast['temperatureUnit']}, {current_forecast['shortForecast']}"
 
             central_tz = pytz.timezone("US/Central")
             daily = {}
@@ -261,7 +308,8 @@ class WeatherForecastWidget(BaseWidget):
             for day_str in sorted(daily.keys())[1:6]:
                 v = daily[day_str]
                 day_short = datetime.strptime(day_str, "%Y-%m-%d").strftime("%a")
-                lines.append(f"{day_short}: {v['desc']}, {v['low']}°/{v['high']}°F")
+                emoji = self._get_emoji(v['desc'])
+                lines.append(f"{day_short}: {emoji} {v['low']}°/{v['high']}°F")
 
             self.mark_updated()
             self.set_text(f"{current_line}\n\n" + "\n".join(lines), app)
@@ -284,9 +332,19 @@ class WeatherForecastWidget(BaseWidget):
 
 class CalendarWidget(BaseWidget):
     def _update_text(self):
-        calendar.setfirstweekday(calendar.SUNDAY)
+        now = datetime.now()
+        cal = calendar.TextCalendar(calendar.SUNDAY)
+        cal_str = cal.formatmonth(now.year, now.month)
+        
+        # The user wants to remove the day of the week from the header.
+        # formatmonth returns "Month Year" as the first line, which is what we want.
+        # So we just use cal_str directly.
+        self.text = self._decorate_text(cal_str)
         self.mark_updated()
-        self.text = self._decorate_text(calendar.month(time.localtime().tm_year, time.localtime().tm_mon))
+
+    def update(self, app):
+        self._update_text()
+        self.update_timer = app.after(3600000, lambda: self.update(app)) # Update every hour
 
 class ICalWidget(BaseWidget):
     def _update_text_worker(self, app):
@@ -353,10 +411,10 @@ class ICalWidget(BaseWidget):
             for event_time, summary, is_dt in all_events[:5]:
                 if is_dt:
                     local = event_time.astimezone(display_tz)
-                    lines.append(f"{local.strftime('%m/%d %I:%M %p')}: {summary}")
+                    lines.append(f"{local.strftime('%a %m/%d %I:%M %p')}: {summary}")
                 else:
                     local = event_time.astimezone(display_tz)
-                    lines.append(f"{local.strftime('%m/%d')}: {summary}")
+                    lines.append(f"{local.strftime('%a %m/%d')}: {summary}")
 
             self.mark_updated()
             self.set_text("\n".join(lines) or "No upcoming events.", app)
@@ -378,6 +436,7 @@ class RssWidget(BaseWidget):
             rss_urls = widget_settings.get("urls", [])
             title = widget_settings.get("title", "")
             style = widget_settings.get("style", "Normal")
+            article_count = int(widget_settings.get("article_count", 5))
 
             if not rss_urls:
                 self.set_error("no urls", app, "Set RSS URLs in widget settings")
@@ -407,10 +466,10 @@ class RssWidget(BaseWidget):
                 return getattr(e, "published_parsed", None) or time.gmtime(0)
             entries.sort(key=_pub, reverse=True)
 
-            titles = [f"• {getattr(e, 'title', '(untitled)')}" for e in entries[:5]]
+            titles = [f"• {getattr(e, 'title', '(untitled)')}" for e in entries[:article_count]]
             
             if style == "Ticker":
-                ticker_text = "   |   ".join([getattr(e, 'title', '(untitled)') for e in entries[:10]])
+                ticker_text = "   |   ".join([getattr(e, 'title', '(untitled)') for e in entries[:article_count]])
                 if title:
                     ticker_text = f"{title}: {ticker_text}"
                 self.mark_updated()
@@ -647,7 +706,17 @@ class HistoryWidget(BaseWidget):
 
             events = data.get("data", {}).get("Events", [])
             if events:
-                event_texts = [f"{e['year']}: {e['text']}" for e in events[:3]]
+                # Sort events by year (oldest to newest)
+                def get_year(e):
+                    try:
+                        return int(e.get('year', 0))
+                    except ValueError:
+                        return 0
+                
+                events.sort(key=get_year)
+                
+                # Take the first 10 items
+                event_texts = [f"{e['year']}: {e['text']}" for e in events[:10]]
                 self.mark_updated()
                 self.set_text("On This Day:\n" + "\n".join(event_texts), app)
             else:
@@ -700,6 +769,30 @@ class CountdownWidget(BaseWidget):
         self._update_text()
         self.update_timer = app.after(1000, lambda: self.update(app)) # Update every second
 
+class QuotesWidget(BaseWidget):
+    def _update_text(self):
+        self.mark_updated()
+        self.text = random.choice(DEFAULT_QUOTES)
+
+    def update(self, app):
+        self._update_text()
+        # Update every 4 hours
+        self.update_timer = app.after(14400000, lambda: self.update(app))
+
+class SystemStatsWidget(BaseWidget):
+    def _update_text(self):
+        if not psutil:
+            self.text = "System Stats\n(psutil not installed)"
+            return
+
+        cpu = psutil.cpu_percent()
+        mem = psutil.virtual_memory().percent
+        self.text = f"CPU: {cpu}%\nRAM: {mem}%"
+
+    def update(self, app):
+        self._update_text()
+        self.update_timer = app.after(2000, lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -712,6 +805,8 @@ WIDGET_CLASSES = {
     "stock": StockWidget,
     "history": HistoryWidget,
     "countdown": CountdownWidget,
+    "quotes": QuotesWidget,
+    "system": SystemStatsWidget,
 }
 
 class WidgetManager:

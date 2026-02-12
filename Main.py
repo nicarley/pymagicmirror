@@ -5,9 +5,9 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider, QColorDialog,
-    QListWidgetItem
+    QListWidgetItem, QScrollArea
 )
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 import cv2
 import pytz
@@ -233,10 +233,14 @@ class SettingsDialog(QDialog):
         self.widget_list.itemClicked.connect(self.display_widget_settings)
         self.widget_layout.addWidget(self.widget_list)
 
+        # Scroll Area for Widget Settings
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
         self.widget_settings_area = QWidget()
         self.widget_settings_area.setObjectName("settings_area")
         self.widget_settings_layout = QVBoxLayout(self.widget_settings_area)
-        self.widget_layout.addWidget(self.widget_settings_area)
+        self.scroll_area.setWidget(self.widget_settings_area)
+        self.widget_layout.addWidget(self.scroll_area)
 
         self.refresh_widget_list()
 
@@ -259,7 +263,7 @@ class SettingsDialog(QDialog):
         if widget_type == "ical":
             self.config["widget_settings"][widget_name] = {"urls": [], "timezone": "US/Central"}
         elif widget_type == "rss":
-            self.config["widget_settings"][widget_name] = {"urls": [], "style": "Normal", "title": ""}
+            self.config["widget_settings"][widget_name] = {"urls": [], "style": "Normal", "title": "", "article_count": 5}
         elif widget_type == "weatherforecast":
             self.config["widget_settings"][widget_name] = {"location": "Salem, IL", "style": "Normal"}
         elif widget_type == "worldclock":
@@ -274,6 +278,10 @@ class SettingsDialog(QDialog):
             pass # No settings for history widget
         elif widget_type == "countdown":
             self.config["widget_settings"][widget_name] = {"name": "New Event", "datetime": ""}
+        elif widget_type == "quotes":
+            pass
+        elif widget_type == "system":
+            pass
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
@@ -297,7 +305,10 @@ class SettingsDialog(QDialog):
             self.clear_layout(self.widget_settings_layout)
 
     def display_widget_settings(self, item):
-        self.save_current_widget_ui_to_config()
+        # Optimization: Only save if we are switching from a valid widget
+        if self.widget_settings_area.property("current_widget"):
+             self.save_current_widget_ui_to_config()
+        
         self.clear_layout(self.widget_settings_layout)
 
         widget_name = item.text()
@@ -379,6 +390,13 @@ class SettingsDialog(QDialog):
             style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(style_combo)
 
+            self.widget_settings_layout.addWidget(QLabel("Article Count"))
+            count_combo = QComboBox(); count_combo.setObjectName("article_count_combo")
+            count_combo.addItems(["5", "10", "15", "20"])
+            count_combo.setCurrentText(str(settings.get("article_count", 5)))
+            count_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(count_combo)
+
             self.widget_settings_layout.addWidget(QLabel("RSS Feed URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
             url_list.addItems(settings.get("urls", []))
@@ -423,7 +441,6 @@ class SettingsDialog(QDialog):
             datetime_entry.setPlaceholderText("e.g., 2024-12-31 23:59")
             datetime_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(datetime_entry)
-
 
     def setup_sports_settings(self, settings):
         self.widget_settings_layout.addWidget(QLabel("League Configurations"))
@@ -554,6 +571,9 @@ class SettingsDialog(QDialog):
             style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
             if style_combo:
                 self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
+            count_combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
+            if count_combo:
+                self.config["widget_settings"][widget_name]["article_count"] = int(count_combo.currentText())
         elif widget_type == "sports":
             configs = []
             config_list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
@@ -593,11 +613,10 @@ class SettingsDialog(QDialog):
             if datetime_entry:
                 self.config["widget_settings"][widget_name]["datetime"] = datetime_entry.text()
 
-        self.parent.widget_manager.restart_updates()
-
     def accept(self):
         self.save_current_widget_ui_to_config()
         self.parent.save_config()
+        self.parent.widget_manager.restart_updates() # Restart updates only on save
         super().accept()
 
     def reject(self):
@@ -851,9 +870,17 @@ class MagicMirrorApp(QMainWindow):
 
             x = widget.ticker_scroll_x
             y = pos[1] # Use the Y position from the config
+            anchor = kwargs.get("anchor", "nw")
+            
+            strip_height = metrics.height() + 10
+            
+            # Adjust y to be the vertical center of the strip
+            if "n" in anchor:
+                y += strip_height / 2
+            elif "s" in anchor:
+                y -= strip_height / 2
             
             # Draw background strip for ticker
-            strip_height = metrics.height() + 10
             painter.fillRect(0, int(y - strip_height/2), self.central_widget.width(), int(strip_height), QColor(0, 0, 0, 150))
 
             baseline_y = y + metrics.ascent() - metrics.height()/2
@@ -872,11 +899,27 @@ class MagicMirrorApp(QMainWindow):
 
             x, y = self._get_top_left_for_anchor(anchor, pos, max_width, total_height)
 
+            # Glassmorphism background
+            # We draw a rounded rect behind the text block
+            bg_rect = QRect(int(x) - 10, int(y) - 5, int(max_width) + 20, int(total_height) + 10)
+            painter.setBrush(QBrush(QColor(0, 0, 0, 100))) # Semi-transparent black
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(bg_rect, 10, 10)
+
             for i, line in enumerate(lines):
                 line_y = y + i * (metrics.height() + 5)
                 line_width = metrics.horizontalAdvance(line)
                 line_x = x
                 baseline_y = line_y + metrics.ascent()
+                
+                # Visual Hierarchy: Make the first line bold if it's a multi-line widget
+                if i == 0 and len(lines) > 1:
+                    font.setBold(True)
+                    painter.setFont(font)
+                else:
+                    font.setBold(False)
+                    painter.setFont(font)
+
                 painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
                 painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
                 painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
@@ -887,6 +930,16 @@ class MagicMirrorApp(QMainWindow):
             for name in reversed(list(self.config["widget_positions"])):
                 bbox = self.get_widget_bbox(name)
                 if bbox and bbox.contains(event.position().toPoint()):
+                    # Switch anchor to 'nw' to keep top-left corner in spot
+                    pos_config = self.config["widget_positions"][name]
+                    if pos_config.get("anchor") != "nw":
+                        new_x = bbox.x() / self.central_widget.width()
+                        new_y = bbox.y() / self.central_widget.height()
+                        pos_config["anchor"] = "nw"
+                        pos_config["x"] = new_x
+                        pos_config["y"] = new_y
+                        self.central_widget.update()
+
                     self.drag_data = {
                         "widget": name,
                         "start_pos": event.position().toPoint(),

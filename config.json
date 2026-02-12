@@ -2,7 +2,7 @@
     "camera_index": -1,
     "video_rotation": 0,
     "mirror_video": true,
-    "text_scale_multiplier": 1.22,
+    "text_scale_multiplier": 1.27,
     "feed_refresh_interval_ms": 3600000,
     "widget_positions": {
         "calendar_1": {
@@ -11,74 +11,79 @@
             "anchor": "center"
         },
         "date_1": {
-            "x": 0.1771701388888889,
-            "y": 0.06543209876543213,
-            "anchor": "center"
+            "x": 0.019270833333333334,
+            "y": 0.07407407407407407,
+            "anchor": "nw"
         },
         "time_1": {
-            "x": 0.16961805555555565,
-            "y": 0.0007716049382715945,
-            "anchor": "center"
+            "x": 0.025000000000000133,
+            "y": 0.0,
+            "anchor": "nw"
         },
         "worldclock_1": {
-            "x": 0.26953125,
-            "y": 0.0050925925925925375,
-            "anchor": "center"
+            "x": 0.20989583333333334,
+            "y": 0.0,
+            "anchor": "nw"
         },
         "worldclock_2": {
-            "x": 0.33819444444444446,
-            "y": 0.004564475278053169,
-            "anchor": "center"
+            "x": 0.2833333333333332,
+            "y": 0.0,
+            "anchor": "nw"
         },
         "weatherforecast_1": {
-            "x": 0.9380208333333333,
-            "y": 0.02283950617283951,
-            "anchor": "center"
+            "x": 0.7838541666666667,
+            "y": 0.004629629629629633,
+            "anchor": "nw"
         },
         "rss_1": {
-            "x": 0.2704861111111111,
-            "y": 0.5540123456790124,
-            "anchor": "center"
+            "x": 0.6354166666666666,
+            "y": 0.1935185185185184,
+            "anchor": "nw"
         },
         "ical_1": {
-            "x": 0.34105902777777775,
-            "y": 0.12716049382716046,
-            "anchor": "center"
-        },
-        "rss_3": {
-            "x": 0.3478298611111111,
-            "y": 0.6884259259259258,
-            "anchor": "center"
-        },
-        "rss_2": {
-            "x": 0.2984375,
-            "y": 0.4222222222222222,
-            "anchor": "center"
+            "x": 0.17291666666666666,
+            "y": 0.13425925925925927,
+            "anchor": "nw"
         },
         "worldclock_3": {
-            "x": 0.40520833333333334,
-            "y": 0.005450941526263631,
-            "anchor": "center"
+            "x": 0.35364583333333344,
+            "y": 0.0,
+            "anchor": "nw"
         },
         "history_1": {
-            "x": 0.6015624999999999,
-            "y": 0.31574074074074077,
-            "anchor": "center"
+            "x": 0.013020833333333294,
+            "y": 0.2842592592592592,
+            "anchor": "nw"
         },
         "sports_1": {
-            "x": 0.9072916666666666,
-            "y": 0.8472222222222222,
-            "anchor": "center"
+            "x": 0.11249999999999999,
+            "y": 0.9342592592592593,
+            "anchor": "nw"
         },
         "countdown_1": {
-            "x": 0.8338541666666667,
-            "y": 0.2657407407407407,
-            "anchor": "center"
+            "x": 0.35260416666666666,
+            "y": 0.17870370370370367,
+            "anchor": "nw"
         },
         "countdown_2": {
-            "x": 0.8578125,
-            "y": 0.36018518518518516,
-            "anchor": "center"
+            "x": 0.3526041666666667,
+            "y": 0.09537037037037033,
+            "anchor": "nw"
+        },
+        "weatherforecast_2": {
+            "x": 0.8692708333333334,
+            "y": 0.004629629629629633,
+            "anchor": "nw"
+        },
+        "weatherforecast_3": {
+            "x": 0.6994791666666667,
+            "y": 0.0027777777777777944,
+            "anchor": "nw"
+        },
+        "quotes_1": {
+            "x": 0.17135416666666664,
+            "y": 0.10555555555555553,
+            "anchor": "nw"
         }
     },
     "widget_settings": {
@@ -102,32 +107,21 @@
         "ical_1": {
             "urls": [
                 "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M",
-                "https://outlook.office365.com/owa/calendar/3406d02feb504fe9a2ab89aa873ddc15@americana.com/13e7018c97a447d7894384e833d4365d13221565013192611009/calendar.ics"
+                "https://outlook.office365.com/owa/calendar/3406d02feb504fe9a2ab89aa873ddc15@americana.com/13e7018c97a447d7894384e833d4365d13221565013192611009/calendar.ics",
+                "https://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb"
             ],
             "timezone": "US/Central"
         },
         "rss_1": {
             "urls": [
-                "https://southernillinoisnow.com/feed/"
+                "https://southernillinoisnow.com/feed/",
+                "https://rss.nytimes.com/services/xml/rss/nyt/US.xml"
             ],
             "style": "Normal",
-            "title": "WJBD"
+            "title": "News",
+            "article_count": 15
         },
         "calendar_2": {},
-        "rss_3": {
-            "urls": [
-                "https://feeds.nbcnews.com/nbcnews/public/news"
-            ],
-            "title": "NBC News",
-            "style": "Normal"
-        },
-        "rss_2": {
-            "urls": [
-                "https://feeds.npr.org/1001/rss.xml"
-            ],
-            "title": "NPR",
-            "style": "Normal"
-        },
         "worldclock_3": {
             "timezone": "UTC"
         },
@@ -161,7 +155,19 @@
             "name": "Kendra's Birthday",
             "datetime": "2026-08-13 00:00"
         },
-        "rss_4": {}
+        "rss_4": {},
+        "traffic_1": {},
+        "weatherforecast_2": {
+            "location": "Islamorada, FL",
+            "style": "Normal"
+        },
+        "weatherforecast_3": {
+            "location": "Mesa, Az",
+            "style": "Normal"
+        },
+        "quotes_1": {},
+        "rss_2": {},
+        "rss_3": {}
     },
     "fullscreen": true,
     "text_color": [
@@ -172,7 +178,7 @@
     "text_shadow_color": [
         0,
         0,
-        0
+        127
     ],
     "FMP_API_KEY": "YOUR_FMP_API_KEY",
     "font_family": "Segoe UI Variable",
