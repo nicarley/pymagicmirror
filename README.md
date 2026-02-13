@@ -41,29 +41,6 @@ A customizable, modular smart mirror application built with Python and PySide6. 
 *   Python 3.x
 *   A connected webcam
 
-### Installation
-
-1.  **Clone the repository:**
-    
-    ```sh
-    git clone https://github.com/YOUR_USERNAME/MagicMirror.git
-    cd MagicMirror
-    ```
-    
-2.  **Install the required dependencies:**
-    
-    ```sh
-    pip install -r requirements.txt
-    ```
-    
-    *(Note: You will need to create a `requirements.txt` file. Based on the project, it should contain `PySide6`, `opencv-python`, `requests`, `pytz`, `icalendar`, `feedparser`, and `psutil`.)*
-
-3.  **Run the application:**
-    
-    ```sh
-    python Main.py
-    ```
-
 ## How to Use
 
 *   **Open Settings:** Click the gear icon (⚙️) in the top right corner to open the settings panel.
