@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import threading
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
@@ -8,11 +9,12 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QScrollArea
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
-from PySide6.QtCore import Qt, QTimer, QPoint, QRect
+from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker
 import cv2
 import pytz
 import certifi
 from widget_manager import WidgetManager, WIDGET_CLASSES
+import web_server
 
 # ensure requests and feedparser see a CA bundle in a bundled app
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
@@ -282,6 +284,8 @@ class SettingsDialog(QDialog):
             pass
         elif widget_type == "system":
             pass
+        elif widget_type == "ip":
+            pass
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
@@ -397,6 +401,12 @@ class SettingsDialog(QDialog):
             count_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(count_combo)
 
+            self.widget_settings_layout.addWidget(QLabel("Max Width (chars)"))
+            width_entry = QLineEdit(str(settings.get("max_width_chars", 50)))
+            width_entry.setObjectName("max_width_entry")
+            width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(width_entry)
+
             self.widget_settings_layout.addWidget(QLabel("RSS Feed URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
             url_list.addItems(settings.get("urls", []))
@@ -441,6 +451,14 @@ class SettingsDialog(QDialog):
             datetime_entry.setPlaceholderText("e.g., 2024-12-31 23:59")
             datetime_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(datetime_entry)
+        elif widget_type == "history":
+            self.widget_settings_layout.addWidget(QLabel("Max Width (chars)"))
+            width_entry = QLineEdit(str(settings.get("max_width_chars", 50)))
+            width_entry.setObjectName("max_width_entry")
+            width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(width_entry)
+        elif widget_type == "ip":
+            self.widget_settings_layout.addWidget(QLabel("No settings for IP widget"))
 
     def setup_sports_settings(self, settings):
         self.widget_settings_layout.addWidget(QLabel("League Configurations"))
@@ -574,6 +592,12 @@ class SettingsDialog(QDialog):
             count_combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
             if count_combo:
                 self.config["widget_settings"][widget_name]["article_count"] = int(count_combo.currentText())
+            width_entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if width_entry:
+                try:
+                    self.config["widget_settings"][widget_name]["max_width_chars"] = int(width_entry.text())
+                except ValueError:
+                    pass
         elif widget_type == "sports":
             configs = []
             config_list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
@@ -612,6 +636,13 @@ class SettingsDialog(QDialog):
             datetime_entry = self.widget_settings_area.findChild(QLineEdit, "countdown_datetime_entry")
             if datetime_entry:
                 self.config["widget_settings"][widget_name]["datetime"] = datetime_entry.text()
+        elif widget_type == "history":
+            width_entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if width_entry:
+                try:
+                    self.config["widget_settings"][widget_name]["max_width_chars"] = int(width_entry.text())
+                except ValueError:
+                    pass
 
     def accept(self):
         self.save_current_widget_ui_to_config()
@@ -640,6 +671,7 @@ class MagicMirrorApp(QMainWindow):
         self.edit_mode = False
         self.drag_data = {"widget": None, "start_pos": None, "start_widget_pos": None}
         self.error_message = ""
+        self.config_mutex = QMutex()
         self.load_config()
 
         self.setWindowTitle("Magic Mirror")
@@ -662,6 +694,9 @@ class MagicMirrorApp(QMainWindow):
         self.ticker_timer = QTimer(self)
         self.ticker_timer.timeout.connect(self.update_tickers)
         self.ticker_timer.start(30)
+
+        # Start Web Server
+        self.web_server = web_server.start_server(self, port=815)
 
     def detect_available_cameras(self):
         available = []
@@ -694,16 +729,23 @@ class MagicMirrorApp(QMainWindow):
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
         else:
-            with open(CONFIG_FILE, "r") as f:
-                self.config = json.load(f)
-            for k, v in default_config.items():
-                if k not in self.config:
-                    self.config[k] = v
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    self.config = json.load(f)
+                for k, v in default_config.items():
+                    if k not in self.config:
+                        self.config[k] = v
+            except (json.JSONDecodeError, IOError):
+                self.config = default_config
         self.save_config()
 
     def save_config(self):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(self.config, f, indent=4)
+        with QMutexLocker(self.config_mutex):
+            try:
+                with open(CONFIG_FILE, "w") as f:
+                    json.dump(self.config, f, indent=4)
+            except IOError as e:
+                print(f"Error saving config: {e}")
 
     def setup_camera(self, camera_index=None):
         if camera_index is None:
@@ -783,24 +825,26 @@ class MagicMirrorApp(QMainWindow):
 
     def update_tickers(self):
         needs_update = False
-        for widget_name, widget in self.widget_manager.widgets.items():
-            settings = self.config.get("widget_settings", {}).get(widget_name, {})
-            if settings.get("style") == "Ticker":
-                widget.ticker_scroll_x -= 2  # Scroll speed
-                needs_update = True
+        with QMutexLocker(self.config_mutex):
+            for widget_name, widget in self.widget_manager.widgets.items():
+                settings = self.config.get("widget_settings", {}).get(widget_name, {})
+                if settings.get("style") == "Ticker":
+                    widget.ticker_scroll_x -= 2  # Scroll speed
+                    needs_update = True
         
         if needs_update:
             self.central_widget.update()
 
     def draw_all_widgets(self, painter):
-        self.widget_manager.draw_all(painter)
-        if self.edit_mode:
-            painter.setPen(QColor(0, 255, 0, 200))
-            painter.setBrush(QColor(0, 255, 0, 50))
-            for name in self.config["widget_positions"]:
-                bbox = self.get_widget_bbox(name)
-                if bbox:
-                    painter.drawRect(bbox)
+        with QMutexLocker(self.config_mutex):
+            self.widget_manager.draw_all(painter, self)
+            if self.edit_mode:
+                painter.setPen(QColor(0, 255, 0, 200))
+                painter.setBrush(QColor(0, 255, 0, 50))
+                for name in self.config["widget_positions"]:
+                    bbox = self.get_widget_bbox(name)
+                    if bbox:
+                        painter.drawRect(bbox)
 
     def _get_top_left_for_anchor(self, anchor, anchor_point, width, height):
         x, y = anchor_point
@@ -927,35 +971,38 @@ class MagicMirrorApp(QMainWindow):
 
     def central_widget_mouse_press(self, event):
         if self.edit_mode and event.button() == Qt.LeftButton:
-            for name in reversed(list(self.config["widget_positions"])):
-                bbox = self.get_widget_bbox(name)
-                if bbox and bbox.contains(event.position().toPoint()):
-                    # Switch anchor to 'nw' to keep top-left corner in spot
-                    pos_config = self.config["widget_positions"][name]
-                    if pos_config.get("anchor") != "nw":
-                        new_x = bbox.x() / self.central_widget.width()
-                        new_y = bbox.y() / self.central_widget.height()
-                        pos_config["anchor"] = "nw"
-                        pos_config["x"] = new_x
-                        pos_config["y"] = new_y
-                        self.central_widget.update()
+            with QMutexLocker(self.config_mutex):
+                for name in reversed(list(self.config["widget_positions"])):
+                    bbox = self.get_widget_bbox(name)
+                    if bbox and bbox.contains(event.position().toPoint()):
+                        # Switch anchor to 'nw' to keep top-left corner in spot
+                        pos_config = self.config["widget_positions"][name]
+                        if pos_config.get("anchor") != "nw":
+                            new_x = bbox.x() / self.central_widget.width()
+                            new_y = bbox.y() / self.central_widget.height()
+                            pos_config["anchor"] = "nw"
+                            pos_config["x"] = new_x
+                            pos_config["y"] = new_y
+                            self.central_widget.update()
 
-                    self.drag_data = {
-                        "widget": name,
-                        "start_pos": event.position().toPoint(),
-                        "start_widget_pos": self.config["widget_positions"][name].copy(),
-                    }
-                    return
+                        self.drag_data = {
+                            "widget": name,
+                            "start_pos": event.position().toPoint(),
+                            "start_widget_pos": self.config["widget_positions"][name].copy(),
+                        }
+                        return
 
     def central_widget_mouse_move(self, event):
         if self.edit_mode and self.drag_data["widget"] and event.buttons() & Qt.LeftButton:
             delta = event.position().toPoint() - self.drag_data["start_pos"]
             if self.central_widget.width() == 0 or self.central_widget.height() == 0:
                 return
-            new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
-            new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
-            self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
-            self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
+            
+            with QMutexLocker(self.config_mutex):
+                new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
+                new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
+                self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
+                self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
             self.central_widget.update()
 
     def central_widget_mouse_release(self, event):
@@ -980,7 +1027,8 @@ class MagicMirrorApp(QMainWindow):
     def toggle_edit_mode(self):
         self.edit_mode = not self.edit_mode
         self.edit_button.setChecked(self.edit_mode)
-        QMessageBox.information(self, "Edit Mode", f"Drag and drop is now {'enabled' if self.edit_mode else 'disabled'}.")
+        # Removed the popup message
+        # QMessageBox.information(self, "Edit Mode", f"Drag and drop is now {'enabled' if self.edit_mode else 'disabled'}.")
 
     def resizeEvent(self, event):
         self.settings_button.move(self.width() - self.settings_button.width() - 10, 10)
@@ -1001,6 +1049,44 @@ class MagicMirrorApp(QMainWindow):
         t.timeout.connect(func)
         t.start(ms)
         return t
+
+    def get_preview_image(self):
+        # Capture the current state of the central widget
+        if not self.central_widget:
+            return None
+        
+        # We can grab the pixmap from the widget, but it might be better to render it
+        # to ensure we get the latest state including overlays.
+        # However, grab() is usually sufficient.
+        pixmap = self.central_widget.grab()
+        
+        # Convert to JPEG
+        byte_array = QBuffer()
+        byte_array.open(QIODevice.WriteOnly)
+        pixmap.save(byte_array, "JPG")
+        return byte_array.data().data()
+
+    def handle_remote_config_update(self):
+        # Called from the web server thread when config is updated
+        # We need to signal the main thread to update UI
+        # Since we are in a different thread, we should use signals/slots or QTimer.singleShot
+        # But for simplicity in this context, we can try to schedule an update.
+        # Note: Direct UI updates from another thread are unsafe in Qt.
+        # We'll use QTimer.singleShot with a lambda that runs in the main thread (if the timer is created in main thread context? No, timer needs to be thread-safe).
+        # Actually, QMetaObject.invokeMethod is the proper way, or signals.
+        # Let's use a simple approach: set a flag or just call update() and hope for the best (risky).
+        # Better: The web server is running in a thread. We should use a signal.
+        # Since I can't easily add a signal to the class definition dynamically without re-instantiating,
+        # I will use QTimer.singleShot(0, self.apply_remote_config) which posts an event to the main loop.
+        QTimer.singleShot(0, self.apply_remote_config)
+
+    def apply_remote_config(self):
+        with QMutexLocker(self.config_mutex):
+            self.set_fullscreen(self.config.get("fullscreen", True))
+            self.restart_camera()
+            self.widget_manager.config = self.config
+            self.widget_manager.load_widgets()
+        self.central_widget.update()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

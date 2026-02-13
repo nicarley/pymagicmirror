@@ -14,6 +14,8 @@ import threading
 import certifi
 import os
 import random
+import socket
+import textwrap
 
 # Try to import psutil for system stats
 try:
@@ -207,6 +209,7 @@ class BaseWidget:
             "countdown": {"scale": 1.5, "thick": 2},
             "quotes": {"scale": 1.0, "thick": 1},
             "system": {"scale": 0.8, "thick": 1},
+            "ip": {"scale": 0.8, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -437,6 +440,7 @@ class RssWidget(BaseWidget):
             title = widget_settings.get("title", "")
             style = widget_settings.get("style", "Normal")
             article_count = int(widget_settings.get("article_count", 5))
+            max_width_chars = int(widget_settings.get("max_width_chars", 50))
 
             if not rss_urls:
                 self.set_error("no urls", app, "Set RSS URLs in widget settings")
@@ -466,7 +470,13 @@ class RssWidget(BaseWidget):
                 return getattr(e, "published_parsed", None) or time.gmtime(0)
             entries.sort(key=_pub, reverse=True)
 
-            titles = [f"• {getattr(e, 'title', '(untitled)')}" for e in entries[:article_count]]
+            titles = []
+            for e in entries[:article_count]:
+                raw_title = getattr(e, 'title', '(untitled)')
+                wrapped_title = textwrap.fill(raw_title, width=max_width_chars)
+                # Indent subsequent lines for better readability if wrapped
+                indented_title = wrapped_title.replace("\n", "\n  ")
+                titles.append(f"• {indented_title}")
             
             if style == "Ticker":
                 ticker_text = "   |   ".join([getattr(e, 'title', '(untitled)') for e in entries[:article_count]])
@@ -700,6 +710,9 @@ class StockWidget(BaseWidget):
 class HistoryWidget(BaseWidget):
     def _update_text_worker(self, app):
         try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            max_width_chars = int(widget_settings.get("max_width_chars", 50))
+
             response = SESSION.get(HISTORY_API_URL)
             response.raise_for_status()
             data = response.json()
@@ -713,10 +726,17 @@ class HistoryWidget(BaseWidget):
                     except ValueError:
                         return 0
                 
-                events.sort(key=get_year)
+                events.sort(key=get_year, reverse=True)
                 
                 # Take the first 10 items
-                event_texts = [f"{e['year']}: {e['text']}" for e in events[:10]]
+                event_texts = []
+                for e in events[:10]:
+                    raw_text = f"{e['year']}: {e['text']}"
+                    wrapped_text = textwrap.fill(raw_text, width=max_width_chars)
+                    # Indent subsequent lines
+                    indented_text = wrapped_text.replace("\n", "\n    ")
+                    event_texts.append(indented_text)
+
                 self.mark_updated()
                 self.set_text("On This Day:\n" + "\n".join(event_texts), app)
             else:
@@ -793,6 +813,23 @@ class SystemStatsWidget(BaseWidget):
         self._update_text()
         self.update_timer = app.after(2000, lambda: self.update(app))
 
+class IPWidget(BaseWidget):
+    def _update_text(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Connect to a public DNS server to determine the local IP used for internet access
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            self.text = f"Management IP: {ip}:815"
+        except Exception:
+            self.text = "IP: Unavailable"
+
+    def update(self, app):
+        self._update_text()
+        # Update every minute
+        self.update_timer = app.after(60000, lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -807,6 +844,7 @@ WIDGET_CLASSES = {
     "countdown": CountdownWidget,
     "quotes": QuotesWidget,
     "system": SystemStatsWidget,
+    "ip": IPWidget,
 }
 
 class WidgetManager:
@@ -833,11 +871,11 @@ class WidgetManager:
             widget_type = widget_name.split("_")[0]
             self.widgets[widget_name] = WIDGET_CLASSES[widget_type](self.config, widget_name)
 
-        self.start_updates()
+        self.start_updates(self.app)
 
-    def start_updates(self):
+    def start_updates(self, app):
         for widget in self.widgets.values():
-            widget.update(self.app)
+            widget.update(app)
 
     def stop_updates(self):
         for widget in self.widgets.values():
@@ -849,10 +887,10 @@ class WidgetManager:
 
     def restart_updates(self):
         self.stop_updates()
-        self.start_updates()
+        self.start_updates(self.app)
 
-    def draw_all(self, painter):
+    def draw_all(self, painter, app):
         for widget_name in list(self.config.get("widget_positions", {}).keys()):
             w = self.widgets.get(widget_name)
             if w:
-                w.draw(painter, self.app)
+                w.draw(painter, app)

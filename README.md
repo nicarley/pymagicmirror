@@ -3,6 +3,7 @@
 A customizable, modular smart mirror application built with Python and PySide6. This application uses a webcam feed as a dynamic background and overlays a variety of customizable widgets to create a personalized smart mirror experience.
 <br/>
 <img src="https://github.com/nicarley/pymagicmirror/blob/master/resources/screenshot.png" width="320px" />
+
 ## Key Features
 
 *   **Live Video Background:** Uses any connected webcam to create a real-time mirror effect.
@@ -13,12 +14,24 @@ A customizable, modular smart mirror application built with Python and PySide6. 
     *   **Calendar:** A simple monthly calendar.
     *   **iCal Feed Aggregator:** Aggregates multiple iCal feeds into a single, unified list of upcoming events.
     *   **RSS Feed Aggregator:** Displays the latest headlines from your favorite RSS feeds.
-*   **Drag-and-Drop Interface:** An intuitive edit mode allows you to easily reposition widgets by simply dragging and dropping them.
+    *   **Sports:** Live scores and game updates for major leagues (NFL, NBA, MLB, NHL, NCAAF, NCAAMB).
+    *   **Stock:** Real-time stock prices and changes for your favorite symbols.
+    *   **History:** "On This Day" historical events.
+    *   **Countdown:** A countdown timer to a specific date and time.
+    *   **Quotes:** Displays random inspirational quotes.
+    *   **System Stats:** Shows CPU and RAM usage.
+    *   **IP Address:** Displays the machine's local IP address for easy remote management access.
+*   **Web Management Interface:** A built-in web server (port 815) allows you to configure the mirror from any device on your network.
+    *   **Live Preview:** View a real-time screenshot of the mirror.
+    *   **Remote Layout Editing:** Drag and drop widgets directly in the web browser.
+    *   **Full Configuration:** Add, remove, and configure all widgets and general settings remotely.
+*   **Drag-and-Drop Interface:** An intuitive edit mode allows you to easily reposition widgets by simply dragging and dropping them directly on the mirror.
 *   **Real-Time Settings Panel:** A comprehensive settings panel allows you to customize the application in real-time, with no need to restart:
     *   **Webcam Selection:** Automatically detects and allows you to switch between multiple connected cameras.
     *   **Fullscreen Control:** Easily toggle between fullscreen and windowed mode.
-    *   **Text Size:** A global text size slider lets you adjust the scale of all widget text.
-    *   **Refresh Interval:** Customize how often the weather, iCal, and RSS feeds are updated.
+    *   **Text Customization:** Adjust global text size, font family, color, and shadow.
+    *   **Refresh Interval:** Customize how often data feeds are updated.
+    *   **Background Opacity:** Dim the video background for better text readability.
 *   **Persistent Configuration:** All your settings and widget layouts are automatically saved to a `config.json` file, so your setup is always just the way you left it.
 
 ## Getting Started
@@ -43,7 +56,7 @@ A customizable, modular smart mirror application built with Python and PySide6. 
     pip install -r requirements.txt
     ```
     
-    *(Note: You will need to create a `requirements.txt` file. Based on the project, it should contain `PySide6`, `opencv-python`, `requests`, `pytz`, `icalendar`, and `feedparser`.)*
+    *(Note: You will need to create a `requirements.txt` file. Based on the project, it should contain `PySide6`, `opencv-python`, `requests`, `pytz`, `icalendar`, `feedparser`, and `psutil`.)*
 
 3.  **Run the application:**
     
@@ -53,13 +66,14 @@ A customizable, modular smart mirror application built with Python and PySide6. 
 
 ## How to Use
 
-*   **Open Settings:** Click the gear icon (⚙️) in the bottom right corner to open the settings panel.
+*   **Open Settings:** Click the gear icon (⚙️) in the top right corner to open the settings panel.
 *   **Edit Layout:** Press the 'E' key or click the 'E' button to enter edit mode. You can then click and drag any widget to a new position. Press 'E' again to save the layout.
+*   **Web Interface:** Open a web browser and navigate to `http://localhost:815` (or the machine's IP address) to access the remote management panel.
 *   **Toggle Fullscreen:** Press `F11` to enter or exit fullscreen mode. `Escape` will also exit fullscreen.
 
 ## Configuration
 
-The application automatically creates and manages a `config.json` file in the root directory. While most settings can be configured through the UI, you can also manually edit this file for advanced customization.
+The application automatically creates and manages a `config.json` file in the root directory. While most settings can be configured through the UI or Web Interface, you can also manually edit this file for advanced customization.
 
 ## Contributing
 
