@@ -1,5 +1,10 @@
 /Build/
 config.json
 node_modules/
-.DS_Store
 npm-debug.log*
+yarn-error.log*
+yarn-debug.log*
+.DS_Store
+.vscode/
+
+package-lock.json

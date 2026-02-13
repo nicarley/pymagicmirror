@@ -308,8 +308,26 @@ class SettingsDialog(QDialog):
             self.refresh_widget_list()
             self.clear_layout(self.widget_settings_layout)
 
+    def add_list_item(self, list_widget):
+        item = QListWidgetItem("New Item")
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        list_widget.addItem(item)
+        self.save_current_widget_ui_to_config()
+
+    def remove_list_item(self, list_widget):
+        list_widget.takeItem(list_widget.currentRow())
+        self.save_current_widget_ui_to_config()
+
+    def add_sport_config(self, list_widget, league_input, teams_input):
+        l = league_input.text()
+        t = teams_input.text()
+        if l:
+            list_widget.addItem(f"{l}: {t}")
+            league_input.clear()
+            teams_input.clear()
+            self.save_current_widget_ui_to_config()
+
     def display_widget_settings(self, item):
-        # Optimization: Only save if we are switching from a valid widget
         if self.widget_settings_area.property("current_widget"):
              self.save_current_widget_ui_to_config()
         
@@ -327,21 +345,23 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("format", "24h"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(combo)
+            
         elif widget_type == "date":
             self.widget_settings_layout.addWidget(QLabel("Date Format"))
             combo = QComboBox(); combo.setObjectName("date_format_combo")
             formats = [
-                "%A, %B %d, %Y", # Monday, January 01, 2024
-                "%a, %b %d, %Y", # Mon, Jan 01, 2024
-                "%m/%d/%Y",      # 01/01/2024
-                "%d.%m.%Y",      # 01.01.2024
-                "%Y-%m-%d"       # 2024-01-01
+                "%A, %B %d, %Y",
+                "%a, %b %d, %Y",
+                "%m/%d/%Y",
+                "%d.%m.%Y",
+                "%Y-%m-%d"
             ]
             combo.addItems(formats)
             combo.setEditable(True)
             combo.setCurrentText(settings.get("format", "%A, %B %d, %Y"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(combo)
+            
         elif widget_type == "worldclock":
             self.widget_settings_layout.addWidget(QLabel("Timezone"))
             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
@@ -349,300 +369,251 @@ class SettingsDialog(QDialog):
             tz_combo.setCurrentText(settings.get("timezone", "UTC"))
             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(tz_combo)
+            
         elif widget_type == "weatherforecast":
-            self.widget_settings_layout.addWidget(QLabel("Location"))
-            location_entry = QLineEdit(settings.get("location", ""))
-            location_entry.setObjectName("location_entry")
-            location_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(location_entry)
+            self.widget_settings_layout.addWidget(QLabel("Location (City, ST)"))
+            entry = QLineEdit(); entry.setObjectName("location_entry")
+            entry.setText(settings.get("location", "Salem, IL"))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(entry)
+            
+            self.widget_settings_layout.addWidget(QLabel("Style"))
+            combo = QComboBox(); combo.setObjectName("style_combo")
+            combo.addItems(["Normal", "Ticker"])
+            combo.setCurrentText(settings.get("style", "Normal"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(combo)
 
-            self.widget_settings_layout.addWidget(QLabel("Display Style"))
-            style_combo = QComboBox(); style_combo.setObjectName("style_combo")
-            style_combo.addItems(["Normal", "Ticker"])
-            style_combo.setCurrentText(settings.get("style", "Normal"))
-            style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(style_combo)
         elif widget_type == "ical":
             self.widget_settings_layout.addWidget(QLabel("Timezone"))
             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
             tz_combo.addItems(pytz.all_timezones)
-            tz_combo.setCurrentText(settings.get("timezone", "US/Central"))
+            tz_combo.setCurrentText(settings.get("timezone", "UTC"))
             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(tz_combo)
-
-            self.widget_settings_layout.addWidget(QLabel("iCal Feed URLs"))
+            
+            self.widget_settings_layout.addWidget(QLabel("iCal URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.addItems(settings.get("urls", []))
+            for url in settings.get("urls", []):
+                item = QListWidgetItem(url)
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                url_list.addItem(item)
             self.widget_settings_layout.addWidget(url_list)
+            
+            add_btn = QPushButton("Add URL")
+            add_btn.clicked.connect(lambda: self.add_list_item(url_list))
+            self.widget_settings_layout.addWidget(add_btn)
+            
+            rem_btn = QPushButton("Remove Selected URL")
+            rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
+            self.widget_settings_layout.addWidget(rem_btn)
+            
+            url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
 
-            add_url_button = QPushButton("Add URL"); remove_url_button = QPushButton("Remove Selected URL")
-            add_url_button.clicked.connect(self.add_url)
-            remove_url_button.clicked.connect(self.remove_url)
-            self.widget_settings_layout.addWidget(add_url_button)
-            self.widget_settings_layout.addWidget(remove_url_button)
         elif widget_type == "rss":
-            self.widget_settings_layout.addWidget(QLabel("Title"))
-            title_entry = QLineEdit(settings.get("title", ""))
-            title_entry.setObjectName("title_entry")
-            title_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(title_entry)
+            self.widget_settings_layout.addWidget(QLabel("Feed Title"))
+            entry = QLineEdit(); entry.setObjectName("title_entry")
+            entry.setText(settings.get("title", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(entry)
+            
+            self.widget_settings_layout.addWidget(QLabel("RSS URLs"))
+            url_list = QListWidget(); url_list.setObjectName("url_list")
+            for url in settings.get("urls", []):
+                item = QListWidgetItem(url)
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                url_list.addItem(item)
+            self.widget_settings_layout.addWidget(url_list)
+            
+            add_btn = QPushButton("Add URL")
+            add_btn.clicked.connect(lambda: self.add_list_item(url_list))
+            self.widget_settings_layout.addWidget(add_btn)
+            
+            rem_btn = QPushButton("Remove Selected URL")
+            rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
+            self.widget_settings_layout.addWidget(rem_btn)
+            
+            url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
 
-            self.widget_settings_layout.addWidget(QLabel("Display Style"))
-            style_combo = QComboBox(); style_combo.setObjectName("style_combo")
-            style_combo.addItems(["Normal", "Ticker"])
-            style_combo.setCurrentText(settings.get("style", "Normal"))
-            style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(style_combo)
-
+            self.widget_settings_layout.addWidget(QLabel("Style"))
+            combo = QComboBox(); combo.setObjectName("style_combo")
+            combo.addItems(["Normal", "Ticker"])
+            combo.setCurrentText(settings.get("style", "Normal"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(combo)
+            
             self.widget_settings_layout.addWidget(QLabel("Article Count"))
             count_combo = QComboBox(); count_combo.setObjectName("article_count_combo")
-            count_combo.addItems(["5", "10", "15", "20"])
+            count_combo.addItems([str(i) for i in range(1, 21)])
             count_combo.setCurrentText(str(settings.get("article_count", 5)))
             count_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(count_combo)
-
-            self.widget_settings_layout.addWidget(QLabel("Max Width (chars)"))
-            width_entry = QLineEdit(str(settings.get("max_width_chars", 50)))
-            width_entry.setObjectName("max_width_entry")
+            
+            self.widget_settings_layout.addWidget(QLabel("Max Width (Chars)"))
+            width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
+            width_entry.setText(str(settings.get("max_width_chars", 50)))
             width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(width_entry)
 
-            self.widget_settings_layout.addWidget(QLabel("RSS Feed URLs"))
-            url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.addItems(settings.get("urls", []))
-            self.widget_settings_layout.addWidget(url_list)
-
-            add_url_button = QPushButton("Add URL"); remove_url_button = QPushButton("Remove Selected URL")
-            add_url_button.clicked.connect(self.add_url)
-            remove_url_button.clicked.connect(self.remove_url)
-            self.widget_settings_layout.addWidget(add_url_button)
-            self.widget_settings_layout.addWidget(remove_url_button)
         elif widget_type == "sports":
-            self.setup_sports_settings(settings)
+             self.widget_settings_layout.addWidget(QLabel("Timezone"))
+             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
+             tz_combo.addItems(pytz.all_timezones)
+             tz_combo.setCurrentText(settings.get("timezone", "UTC"))
+             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+             self.widget_settings_layout.addWidget(tz_combo)
+             
+             self.widget_settings_layout.addWidget(QLabel("Style"))
+             combo = QComboBox(); combo.setObjectName("style_combo")
+             combo.addItems(["Normal", "Ticker"])
+             combo.setCurrentText(settings.get("style", "Normal"))
+             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+             self.widget_settings_layout.addWidget(combo)
+             
+             self.widget_settings_layout.addWidget(QLabel("Leagues & Teams"))
+             config_list = QListWidget(); config_list.setObjectName("sports_config_list")
+             for cfg in settings.get("configs", []):
+                 teams_str = ", ".join(cfg.get("teams", [])) if cfg.get("teams") else "All"
+                 config_list.addItem(f"{cfg.get('league')}: {teams_str}")
+             self.widget_settings_layout.addWidget(config_list)
+             
+             add_layout = QHBoxLayout()
+             league_input = QLineEdit(); league_input.setPlaceholderText("League (e.g. nfl)")
+             teams_input = QLineEdit(); teams_input.setPlaceholderText("Teams (e.g. CHI, GB) or 'All'")
+             add_btn = QPushButton("Add")
+             
+             add_btn.clicked.connect(lambda: self.add_sport_config(config_list, league_input, teams_input))
+             add_layout.addWidget(league_input)
+             add_layout.addWidget(teams_input)
+             add_layout.addWidget(add_btn)
+             self.widget_settings_layout.addLayout(add_layout)
+             
+             rem_btn = QPushButton("Remove Selected")
+             rem_btn.clicked.connect(lambda: self.remove_list_item(config_list))
+             self.widget_settings_layout.addWidget(rem_btn)
+
         elif widget_type == "stock":
-            self.widget_settings_layout.addWidget(QLabel("API Key"))
-            api_key_entry = QLineEdit(settings.get("api_key", self.config.get("FMP_API_KEY", "")))
-            api_key_entry.setObjectName("api_key_entry")
-            api_key_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(api_key_entry)
+            self.widget_settings_layout.addWidget(QLabel("API Key (FMP)"))
+            entry = QLineEdit(); entry.setObjectName("api_key_entry")
+            entry.setText(settings.get("api_key", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(entry)
+            
+            self.widget_settings_layout.addWidget(QLabel("Symbols (comma separated)"))
+            sym_entry = QLineEdit(); sym_entry.setObjectName("symbols_entry")
+            sym_entry.setText(", ".join(settings.get("symbols", [])))
+            sym_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(sym_entry)
+            
+            self.widget_settings_layout.addWidget(QLabel("Style"))
+            combo = QComboBox(); combo.setObjectName("style_combo")
+            combo.addItems(["Normal", "Ticker"])
+            combo.setCurrentText(settings.get("style", "Normal"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(combo)
 
-            self.widget_settings_layout.addWidget(QLabel("Symbols (comma-separated)"))
-            symbols_entry = QLineEdit(",".join(settings.get("symbols", [])))
-            symbols_entry.setObjectName("symbols_entry")
-            symbols_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(symbols_entry)
-
-            self.widget_settings_layout.addWidget(QLabel("Display Style"))
-            style_combo = QComboBox(); style_combo.setObjectName("style_combo")
-            style_combo.addItems(["Normal", "Ticker"])
-            style_combo.setCurrentText(settings.get("style", "Normal"))
-            style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(style_combo)
         elif widget_type == "countdown":
             self.widget_settings_layout.addWidget(QLabel("Event Name"))
-            name_entry = QLineEdit(settings.get("name", "New Event"))
-            name_entry.setObjectName("countdown_name_entry")
-            name_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(name_entry)
+            entry = QLineEdit(); entry.setObjectName("countdown_name_entry")
+            entry.setText(settings.get("name", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(entry)
+            
+            self.widget_settings_layout.addWidget(QLabel("Date Time (YYYY-MM-DD HH:MM)"))
+            dt_entry = QLineEdit(); dt_entry.setObjectName("countdown_datetime_entry")
+            dt_entry.setText(settings.get("datetime", ""))
+            dt_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            self.widget_settings_layout.addWidget(dt_entry)
 
-            self.widget_settings_layout.addWidget(QLabel("Target Date and Time (YYYY-MM-DD HH:MM)"))
-            datetime_entry = QLineEdit(settings.get("datetime", ""))
-            datetime_entry.setObjectName("countdown_datetime_entry")
-            datetime_entry.setPlaceholderText("e.g., 2024-12-31 23:59")
-            datetime_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(datetime_entry)
         elif widget_type == "history":
-            self.widget_settings_layout.addWidget(QLabel("Max Width (chars)"))
-            width_entry = QLineEdit(str(settings.get("max_width_chars", 50)))
-            width_entry.setObjectName("max_width_entry")
+            self.widget_settings_layout.addWidget(QLabel("Max Width (Chars)"))
+            width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
+            width_entry.setText(str(settings.get("max_width_chars", 50)))
             width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
             self.widget_settings_layout.addWidget(width_entry)
+            
         elif widget_type == "ip":
             self.widget_settings_layout.addWidget(QLabel("No settings for IP widget"))
-
-    def setup_sports_settings(self, settings):
-        self.widget_settings_layout.addWidget(QLabel("League Configurations"))
-        
-        self.sports_config_list = QListWidget()
-        self.sports_config_list.setObjectName("sports_config_list")
-        for config in settings.get("configs", []):
-            league = config.get("league", "N/A")
-            teams = ", ".join(config.get("teams", []))
-            self.sports_config_list.addItem(f"{league.upper()}: {teams if teams else 'All'}")
-        self.widget_settings_layout.addWidget(self.sports_config_list)
-
-        # Add new config section
-        add_layout = QHBoxLayout()
-        self.new_sport_league_combo = QComboBox()
-        self.new_sport_league_combo.addItems(["NFL", "NBA", "MLB", "NHL", "NCAAF", "NCAAMB"])
-        add_layout.addWidget(self.new_sport_league_combo)
-        self.new_sport_teams_entry = QLineEdit()
-        self.new_sport_teams_entry.setPlaceholderText("Teams (e.g. CHI,STL)")
-        add_layout.addWidget(self.new_sport_teams_entry)
-        self.widget_settings_layout.addLayout(add_layout)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        add_sport_btn = QPushButton("Add League/Teams")
-        add_sport_btn.clicked.connect(self.add_sports_config)
-        btn_layout.addWidget(add_sport_btn)
-        remove_sport_btn = QPushButton("Remove Selected")
-        remove_sport_btn.clicked.connect(self.remove_sports_config)
-        btn_layout.addWidget(remove_sport_btn)
-        self.widget_settings_layout.addLayout(btn_layout)
-
-        # Timezone
-        self.widget_settings_layout.addWidget(QLabel("Timezone"))
-        tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
-        tz_combo.addItems(pytz.all_timezones)
-        tz_combo.setCurrentText(settings.get("timezone", "UTC"))
-        tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-        self.widget_settings_layout.addWidget(tz_combo)
-
-        # Style
-        self.widget_settings_layout.addWidget(QLabel("Display Style"))
-        style_combo = QComboBox(); style_combo.setObjectName("style_combo")
-        style_combo.addItems(["Normal", "Ticker"])
-        style_combo.setCurrentText(settings.get("style", "Normal"))
-        style_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-        self.widget_settings_layout.addWidget(style_combo)
-
-    def add_sports_config(self):
-        league = self.new_sport_league_combo.currentText()
-        teams_text = self.new_sport_teams_entry.text()
-        
-        if not league:
-            return
-
-        teams = [team.strip().upper() for team in teams_text.split(",") if team.strip()]
-        
-        # Add to UI list
-        self.sports_config_list.addItem(f"{league.upper()}: {', '.join(teams) if teams else 'All'}")
-        self.new_sport_teams_entry.clear()
-        self.save_current_widget_ui_to_config()
-
-    def remove_sports_config(self):
-        current_item = self.sports_config_list.currentItem()
-        if current_item:
-            self.sports_config_list.takeItem(self.sports_config_list.row(current_item))
-            self.save_current_widget_ui_to_config()
-
-    def add_url(self):
-        url, ok = QInputDialog.getText(self, "Add URL", "Enter the new URL")
-        if ok and url:
-            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if url_list:
-                url_list.addItem(url)
-                self.save_current_widget_ui_to_config()
-
-    def remove_url(self):
-        url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
-        if url_list and url_list.currentItem():
-            url_list.takeItem(url_list.row(url_list.currentItem()))
-            self.save_current_widget_ui_to_config()
 
     def save_current_widget_ui_to_config(self, *args):
         widget_name = self.widget_settings_area.property("current_widget")
         if not widget_name:
             return
-
+        
         widget_type = widget_name.split("_")[0]
-        self.config.setdefault("widget_settings", {}).setdefault(widget_name, {})
+        if widget_name not in self.config["widget_settings"]:
+            self.config["widget_settings"][widget_name] = {}
+            
+        settings = self.config["widget_settings"][widget_name]
 
         if widget_type == "time":
             combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
-            if combo:
-                self.config["widget_settings"][widget_name]["format"] = combo.currentText()
+            if combo: settings["format"] = combo.currentText()
         elif widget_type == "date":
             combo = self.widget_settings_area.findChild(QComboBox, "date_format_combo")
-            if combo:
-                self.config["widget_settings"][widget_name]["format"] = combo.currentText()
+            if combo: settings["format"] = combo.currentText()
         elif widget_type == "worldclock":
-            tz_combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if tz_combo:
-                self.config["widget_settings"][widget_name]["timezone"] = tz_combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
         elif widget_type == "weatherforecast":
-            location_entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
-            if location_entry:
-                self.config["widget_settings"][widget_name]["location"] = location_entry.text()
-            style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if style_combo:
-                self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
+            entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
+            if entry: settings["location"] = entry.text()
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
         elif widget_type == "ical":
-            tz_combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if tz_combo:
-                self.config["widget_settings"][widget_name]["timezone"] = tz_combo.currentText()
-            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if url_list:
-                self.config["widget_settings"][widget_name]["urls"] = [
-                    url_list.item(i).text() for i in range(url_list.count())
-                ]
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
         elif widget_type == "rss":
-            title_entry = self.widget_settings_area.findChild(QLineEdit, "title_entry")
-            if title_entry:
-                self.config["widget_settings"][widget_name]["title"] = title_entry.text()
-            url_list = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if url_list:
-                self.config["widget_settings"][widget_name]["urls"] = [
-                    url_list.item(i).text() for i in range(url_list.count())
-                ]
-            style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if style_combo:
-                self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
-            count_combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
-            if count_combo:
-                self.config["widget_settings"][widget_name]["article_count"] = int(count_combo.currentText())
-            width_entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
-            if width_entry:
-                try:
-                    self.config["widget_settings"][widget_name]["max_width_chars"] = int(width_entry.text())
-                except ValueError:
-                    pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "title_entry")
+            if entry: settings["title"] = entry.text()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
+            if combo: settings["article_count"] = int(combo.currentText())
+            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if entry:
+                try: settings["max_width_chars"] = int(entry.text())
+                except ValueError: pass
         elif widget_type == "sports":
-            configs = []
-            config_list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
-            if config_list_widget:
-                for i in range(config_list_widget.count()):
-                    item_text = config_list_widget.item(i).text()
-                    parts = item_text.split(":", 1)
-                    league = parts[0].strip()
-                    teams_str = parts[1].strip()
-                    teams = [t.strip() for t in teams_str.split(",")] if teams_str.lower() != 'all' else []
-                    configs.append({"league": league, "teams": teams})
-            self.config["widget_settings"][widget_name]["configs"] = configs
-            
-            tz_combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if tz_combo:
-                self.config["widget_settings"][widget_name]["timezone"] = tz_combo.currentText()
-
-            style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if style_combo:
-                self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
+            if list_widget:
+                configs = []
+                for i in range(list_widget.count()):
+                    text = list_widget.item(i).text()
+                    parts = text.split(":", 1)
+                    if len(parts) == 2:
+                        league = parts[0].strip()
+                        teams_str = parts[1].strip()
+                        teams = [t.strip() for t in teams_str.split(",")] if teams_str.lower() != 'all' else []
+                        configs.append({"league": league, "teams": teams})
+                settings["configs"] = configs
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
         elif widget_type == "stock":
-            api_key_entry = self.widget_settings_area.findChild(QLineEdit, "api_key_entry")
-            if api_key_entry:
-                self.config["widget_settings"][widget_name]["api_key"] = api_key_entry.text()
-            symbols_entry = self.widget_settings_area.findChild(QLineEdit, "symbols_entry")
-            if symbols_entry:
-                self.config["widget_settings"][widget_name]["symbols"] = [s.strip() for s in symbols_entry.text().split(",")]
-            
-            style_combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if style_combo:
-                self.config["widget_settings"][widget_name]["style"] = style_combo.currentText()
+            entry = self.widget_settings_area.findChild(QLineEdit, "api_key_entry")
+            if entry: settings["api_key"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "symbols_entry")
+            if entry: settings["symbols"] = [s.strip() for s in entry.text().split(",")]
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
         elif widget_type == "countdown":
-            name_entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
-            if name_entry:
-                self.config["widget_settings"][widget_name]["name"] = name_entry.text()
-            datetime_entry = self.widget_settings_area.findChild(QLineEdit, "countdown_datetime_entry")
-            if datetime_entry:
-                self.config["widget_settings"][widget_name]["datetime"] = datetime_entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
+            if entry: settings["name"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_datetime_entry")
+            if entry: settings["datetime"] = entry.text()
         elif widget_type == "history":
-            width_entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
-            if width_entry:
-                try:
-                    self.config["widget_settings"][widget_name]["max_width_chars"] = int(width_entry.text())
-                except ValueError:
-                    pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if entry:
+                try: settings["max_width_chars"] = int(entry.text())
+                except ValueError: pass
 
     def accept(self):
         self.save_current_widget_ui_to_config()
@@ -664,6 +635,8 @@ class SettingsDialog(QDialog):
             child = layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+            elif child.layout():
+                self.clear_layout(child.layout())
 
 class MagicMirrorApp(QMainWindow):
     def __init__(self):
@@ -904,13 +877,10 @@ class MagicMirrorApp(QMainWindow):
             text_width = metrics.horizontalAdvance(text)
             widget = self.widget_manager.widgets.get(widget_name)
             
-            # Reset scroll if it's gone too far left
-            if widget.ticker_scroll_x < -text_width:
-                widget.ticker_scroll_x = self.central_widget.width()
-
             # Initialize scroll if needed (first draw)
-            if widget.ticker_scroll_x == 0 and text_width > 0:
+            if not getattr(widget, "ticker_initialized", False):
                  widget.ticker_scroll_x = self.central_widget.width()
+                 widget.ticker_initialized = True
 
             x = widget.ticker_scroll_x
             y = pos[1] # Use the Y position from the config
@@ -933,6 +903,19 @@ class MagicMirrorApp(QMainWindow):
             painter.drawText(QPoint(int(x) + 2, int(baseline_y) + 2), text)
             painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
             painter.drawText(QPoint(int(x), int(baseline_y)), text)
+            
+            # Draw the text again if it's scrolling off the screen to create a seamless loop
+            gap = 50
+            if x + text_width < self.central_widget.width():
+                x2 = x + text_width + gap
+                painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
+                painter.drawText(QPoint(int(x2) + 2, int(baseline_y) + 2), text)
+                painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
+                painter.drawText(QPoint(int(x2), int(baseline_y)), text)
+                
+                # Reset scroll logic for infinite loop
+                if x < -text_width:
+                     widget.ticker_scroll_x += (text_width + gap)
 
         else:
             # Normal multi-line drawing logic

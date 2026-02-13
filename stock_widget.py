@@ -14,7 +14,7 @@ class StockWidget:
 
     def update(self):
         if not self.api_key or self.api_key == "YOUR_FMP_API_KEY":
-            self.text = "Stock Widget: API Key Needed"
+            self.text = "Stock Widget: API Key Needed (financialmodelingprep.com)"
             return
 
         stock_data = []

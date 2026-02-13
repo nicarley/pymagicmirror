@@ -16,7 +16,7 @@ A customizable, modular smart mirror application built with Python and PySide6. 
     *   **RSS Feed Aggregator:** Displays the latest headlines from your favorite RSS feeds.
     *   **Sports:** Live scores and game updates for major leagues (NFL, NBA, MLB, NHL, NCAAF, NCAAMB).
     *   **Stock:** Real-time stock prices and changes for your favorite symbols.
-      * https://site.financialmodelingprep.com/developer/docs/pricing Must have an API Key from here
+    *          * https://site.financialmodelingprep.com/developer/docs/pricing Must have an API Key from here
     *   **History:** "On This Day" historical events.
     *   **Countdown:** A countdown timer to a specific date and time.
     *   **Quotes:** Displays random inspirational quotes.

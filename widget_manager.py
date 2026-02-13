@@ -308,7 +308,7 @@ class WeatherForecastWidget(BaseWidget):
                     daily[key]["desc"] = p["shortForecast"]
 
             lines = []
-            for day_str in sorted(daily.keys())[1:6]:
+            for day_str in sorted(daily.keys())[:5]:
                 v = daily[day_str]
                 day_short = datetime.strptime(day_str, "%Y-%m-%d").strftime("%a")
                 emoji = self._get_emoji(v['desc'])
