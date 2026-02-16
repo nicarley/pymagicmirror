@@ -210,6 +210,7 @@ class BaseWidget:
             "quotes": {"scale": 1.0, "thick": 1},
             "system": {"scale": 0.8, "thick": 1},
             "ip": {"scale": 0.8, "thick": 1},
+            "moon": {"scale": 0.9, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -830,6 +831,54 @@ class IPWidget(BaseWidget):
         # Update every minute
         self.update_timer = app.after(60000, lambda: self.update(app))
 
+class MoonWidget(BaseWidget):
+    def _update_text(self):
+        try:
+            # Simple moon phase calculation
+            # Based on Conway's method
+            date = datetime.now()
+            year = date.year
+            month = date.month
+            day = date.day
+
+            if month < 3:
+                year -= 1
+                month += 12
+
+            month += 1
+            c = 365.25 * year
+            e = 30.6 * month
+            jd = c + e + day - 694039.09
+            jd /= 29.5305882
+            b = int(jd)
+            jd -= b
+            b = round(jd * 8)
+            
+            if b >= 8:
+                b = 0
+
+            phases = {
+                0: "New Moon 🌑",
+                1: "Waxing Crescent 🌒",
+                2: "First Quarter 🌓",
+                3: "Waxing Gibbous 🌔",
+                4: "Full Moon 🌕",
+                5: "Waning Gibbous 🌖",
+                6: "Last Quarter 🌗",
+                7: "Waning Crescent 🌘"
+            }
+            
+            self.text = phases[b]
+            self.mark_updated()
+        except Exception as e:
+            print(f"Moon widget error: {e}")
+            self.text = "Moon: Error"
+
+    def update(self, app):
+        self._update_text()
+        # Update every 4 hours
+        self.update_timer = app.after(14400000, lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -845,6 +894,7 @@ WIDGET_CLASSES = {
     "quotes": QuotesWidget,
     "system": SystemStatsWidget,
     "ip": IPWidget,
+    "moon": MoonWidget,
 }
 
 class WidgetManager:
