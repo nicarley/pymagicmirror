@@ -95,11 +95,20 @@ class SettingsDialog(QDialog):
         self.available_cameras = self.parent.detect_available_cameras()
         self.camera_combo.addItem("No Video")
         self.camera_combo.addItems([f"Camera {i}" for i in self.available_cameras])
+        
         current_cam_index = self.config.get("camera_index", -1)
-        if current_cam_index == -1:
+        mode = self.config.get("background_mode", "Camera")
+        
+        if mode == "None":
             self.camera_combo.setCurrentIndex(0)
         elif current_cam_index in self.available_cameras:
             self.camera_combo.setCurrentIndex(self.available_cameras.index(current_cam_index) + 1)
+        else:
+            if self.available_cameras:
+                self.camera_combo.setCurrentIndex(1)
+            else:
+                self.camera_combo.setCurrentIndex(0)
+                
         self.camera_combo.currentIndexChanged.connect(self.live_update_camera)
         self.general_layout.addWidget(self.camera_combo)
 
@@ -184,13 +193,12 @@ class SettingsDialog(QDialog):
 
     def live_update_camera(self, index):
         if index == 0:
-            selected = -1
+            self.config["background_mode"] = "None"
         else:
-            selected = self.available_cameras[index - 1]
-        if self.config.get("camera_index") != selected:
-            self.config["camera_index"] = selected
-            self.parent.clear_error_message()
-            self.parent.restart_camera()
+            self.config["background_mode"] = "Camera"
+            if self.available_cameras:
+                self.config["camera_index"] = self.available_cameras[index - 1]
+        self.parent.restart_camera()
 
     def live_update_mirror_video(self, state):
         self.config["mirror_video"] = self.mirror_video_check.isChecked()
@@ -232,7 +240,7 @@ class SettingsDialog(QDialog):
         self.widget_layout.addLayout(add_remove)
 
         self.widget_list = QListWidget()
-        self.widget_list.itemClicked.connect(self.display_widget_settings)
+        self.widget_list.currentItemChanged.connect(lambda current, previous: self.display_widget_settings(current))
         self.widget_layout.addWidget(self.widget_list)
 
         # Scroll Area for Widget Settings
@@ -247,16 +255,22 @@ class SettingsDialog(QDialog):
         self.refresh_widget_list()
 
     def refresh_widget_list(self):
+        # Save current settings before clearing!
+        if self.widget_settings_area.property("current_widget"):
+             self.save_current_widget_ui_to_config()
+             self.widget_settings_area.setProperty("current_widget", None)
+
         current = self.widget_list.currentItem().text() if self.widget_list.currentItem() else None
         self.widget_list.clear()
         for name in sorted(self.config.get("widget_positions", {})):
             self.widget_list.addItem(name)
             if name == current:
-                self.widget_list.setCurrentRow(self.widget_list.count() - 1)
+                items = self.widget_list.findItems(name, Qt.MatchExactly)
+                if items:
+                    self.widget_list.setCurrentItem(items[0])
         
-        # Ensure settings are displayed for the selected item if any
-        if self.widget_list.currentItem():
-            self.display_widget_settings(self.widget_list.currentItem())
+        if not self.widget_list.currentItem() and self.widget_list.count() > 0:
+             self.widget_list.setCurrentRow(0)
 
     def add_widget(self):
         widget_type = self.widget_combo.currentText()
@@ -298,7 +312,6 @@ class SettingsDialog(QDialog):
         items = self.widget_list.findItems(widget_name, Qt.MatchExactly)
         if items:
             self.widget_list.setCurrentItem(items[0])
-            # display_widget_settings is called via signal
 
     def remove_widget(self):
         current_item = self.widget_list.currentItem()
@@ -561,6 +574,101 @@ class SettingsDialog(QDialog):
         
         elif widget_type == "moon":
             self.widget_settings_layout.addWidget(QLabel("No settings for Moon widget"))
+        
+        elif widget_type == "calendar":
+            self.widget_settings_layout.addWidget(QLabel("No settings for Calendar widget"))
+            
+        elif widget_type == "quotes":
+            self.widget_settings_layout.addWidget(QLabel("No settings for Quotes widget"))
+            
+        elif widget_type == "system":
+            self.widget_settings_layout.addWidget(QLabel("No settings for System Stats widget"))
+
+    def save_current_widget_ui_to_config(self, *args):
+        widget_name = self.widget_settings_area.property("current_widget")
+        if not widget_name:
+            return
+        
+        widget_type = widget_name.split("_")[0]
+        if widget_name not in self.config["widget_settings"]:
+            self.config["widget_settings"][widget_name] = {}
+            
+        settings = self.config["widget_settings"][widget_name]
+
+        # Save per-widget font size
+        slider = self.widget_settings_area.findChild(QSlider, "font_size_slider")
+        if slider:
+            settings["font_scale"] = slider.value() / 100.0
+            self.parent.central_widget.update() # Live update
+
+        if widget_type == "time":
+            combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
+            if combo: settings["format"] = combo.currentText()
+        elif widget_type == "date":
+            combo = self.widget_settings_area.findChild(QComboBox, "date_format_combo")
+            if combo: settings["format"] = combo.currentText()
+        elif widget_type == "worldclock":
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+        elif widget_type == "weatherforecast":
+            entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
+            if entry: settings["location"] = entry.text()
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
+        elif widget_type == "ical":
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+        elif widget_type == "rss":
+            entry = self.widget_settings_area.findChild(QLineEdit, "title_entry")
+            if entry: settings["title"] = entry.text()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
+            if combo: settings["article_count"] = int(combo.currentText())
+            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if entry:
+                try: settings["max_width_chars"] = int(entry.text())
+                except ValueError: pass
+        elif widget_type == "sports":
+            list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
+            if list_widget:
+                configs = []
+                for i in range(list_widget.count()):
+                    text = list_widget.item(i).text()
+                    parts = text.split(":", 1)
+                    if len(parts) == 2:
+                        league = parts[0].strip()
+                        teams_str = parts[1].strip()
+                        teams = [t.strip() for t in teams_str.split(",")] if teams_str.lower() != 'all' else []
+                        configs.append({"league": league, "teams": teams})
+                settings["configs"] = configs
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
+        elif widget_type == "stock":
+            entry = self.widget_settings_area.findChild(QLineEdit, "api_key_entry")
+            if entry: settings["api_key"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "symbols_entry")
+            if entry: settings["symbols"] = [s.strip() for s in entry.text().split(",")]
+            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
+            if combo: settings["style"] = combo.currentText()
+        elif widget_type == "countdown":
+            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
+            if entry: settings["name"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_datetime_entry")
+            if entry: settings["datetime"] = entry.text()
+        elif widget_type == "history":
+            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
+            if entry:
+                try: settings["max_width_chars"] = int(entry.text())
+                except ValueError: pass
 
     def accept(self):
         self.save_current_widget_ui_to_config()
