@@ -2,6 +2,7 @@ import threading
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
+from PySide6.QtGui import QFontDatabase
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -44,6 +45,7 @@ HTML_TEMPLATE = """
             width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box; font-family: inherit;
         }
         input[type="checkbox"] { transform: scale(1.2); }
+        input[type="range"] { width: 100%; }
         button { padding: 8px 16px; background: #0078d7; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
         button:hover { background: #1084e3; }
         button.secondary { background: #444; margin-right: 10px; }
@@ -123,7 +125,7 @@ HTML_TEMPLATE = """
         const WIDGET_TYPES = [
             "time", "date", "worldclock", "calendar", "weatherforecast", 
             "ical", "rss", "sports", "stock", "history", "countdown", 
-            "quotes", "system", "ip"
+            "quotes", "system", "ip", "moon"
         ];
 
         async function loadConfig() {
@@ -362,6 +364,7 @@ HTML_TEMPLATE = """
             addInput("Mirror Video", "mirror_video", "checkbox");
             addInput("Text Scale", "text_scale_multiplier", "number");
             addInput("Background Opacity", "background_opacity", "number");
+            addInput("Font Family", "font_family", "select", config.available_fonts || []);
             
             // Add Widget Section
             const addSection = document.createElement('div');
@@ -430,15 +433,35 @@ HTML_TEMPLATE = """
 
                     widgetDiv.appendChild(title);
 
-                    if (Object.keys(settings).length === 0) {
-                        const empty = document.createElement('div');
-                        empty.style.fontSize = '0.8rem';
-                        empty.style.color = '#777';
-                        empty.innerText = 'No settings available';
-                        widgetDiv.appendChild(empty);
-                    }
+                    // Font Scale Slider
+                    const fontRow = document.createElement('div');
+                    fontRow.style.marginBottom = '8px';
+                    
+                    const fontLbl = document.createElement('label');
+                    fontLbl.innerText = "Font Scale: " + (settings.font_scale || 1.0).toFixed(1);
+                    fontLbl.style.fontSize = '0.8rem';
+                    fontRow.appendChild(fontLbl);
+                    
+                    const fontInput = document.createElement('input');
+                    fontInput.type = 'range';
+                    fontInput.min = 0.5;
+                    fontInput.max = 2.0;
+                    fontInput.step = 0.1;
+                    fontInput.value = settings.font_scale || 1.0;
+                    
+                    fontInput.oninput = (e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!config.widget_settings[widgetName]) config.widget_settings[widgetName] = {};
+                        config.widget_settings[widgetName].font_scale = val;
+                        fontLbl.innerText = "Font Scale: " + val.toFixed(1);
+                    };
+                    
+                    fontRow.appendChild(fontInput);
+                    widgetDiv.appendChild(fontRow);
 
                     for (const [key, value] of Object.entries(settings)) {
+                        if (key === 'font_scale') continue; // Skip as we handled it above
+
                         const row = document.createElement('div');
                         row.style.marginBottom = '8px';
                         
@@ -494,10 +517,14 @@ HTML_TEMPLATE = """
             const status = document.getElementById('status');
             status.innerText = "Saving...";
             try {
+                // Remove temporary available_fonts before saving
+                const configToSave = { ...config };
+                delete configToSave.available_fonts;
+
                 await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
+                    body: JSON.stringify(configToSave)
                 });
                 status.innerText = "Saved!";
                 setTimeout(() => status.innerText = "", 2000);
@@ -530,7 +557,10 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(self.server.app.config).encode("utf-8"))
+            # Add available fonts to the config for the web UI
+            full_config = self.server.app.config.copy()
+            full_config['available_fonts'] = sorted(QFontDatabase.families())
+            self.wfile.write(json.dumps(full_config).encode("utf-8"))
         elif parsed.path == "/api/preview":
             self.handle_preview()
         else:

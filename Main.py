@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider, QColorDialog,
-    QListWidgetItem, QScrollArea
+    QListWidgetItem, QScrollArea, QFileDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker
@@ -253,6 +253,10 @@ class SettingsDialog(QDialog):
             self.widget_list.addItem(name)
             if name == current:
                 self.widget_list.setCurrentRow(self.widget_list.count() - 1)
+        
+        # Ensure settings are displayed for the selected item if any
+        if self.widget_list.currentItem():
+            self.display_widget_settings(self.widget_list.currentItem())
 
     def add_widget(self):
         widget_type = self.widget_combo.currentText()
@@ -286,13 +290,15 @@ class SettingsDialog(QDialog):
             pass
         elif widget_type == "ip":
             pass
+        elif widget_type == "moon":
+            pass
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
         items = self.widget_list.findItems(widget_name, Qt.MatchExactly)
         if items:
             self.widget_list.setCurrentItem(items[0])
-            self.display_widget_settings(items[0])
+            # display_widget_settings is called via signal
 
     def remove_widget(self):
         current_item = self.widget_list.currentItem()
@@ -312,6 +318,8 @@ class SettingsDialog(QDialog):
         item = QListWidgetItem("New Item")
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         list_widget.addItem(item)
+        list_widget.setCurrentItem(item)
+        list_widget.editItem(item)
         self.save_current_widget_ui_to_config()
 
     def remove_list_item(self, list_widget):
@@ -328,6 +336,10 @@ class SettingsDialog(QDialog):
             self.save_current_widget_ui_to_config()
 
     def display_widget_settings(self, item):
+        if not item:
+            self.clear_layout(self.widget_settings_layout)
+            return
+
         if self.widget_settings_area.property("current_widget"):
              self.save_current_widget_ui_to_config()
         
@@ -337,6 +349,15 @@ class SettingsDialog(QDialog):
         self.widget_settings_area.setProperty("current_widget", widget_name)
         widget_type = widget_name.split("_")[0]
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
+
+        # Add per-widget font size slider
+        self.widget_settings_layout.addWidget(QLabel("Widget Font Size"))
+        font_slider = QSlider(Qt.Horizontal)
+        font_slider.setObjectName("font_size_slider")
+        font_slider.setRange(50, 200)
+        font_slider.setValue(int(settings.get("font_scale", 1.0) * 100))
+        font_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
+        self.widget_settings_layout.addWidget(font_slider)
 
         if widget_type == "time":
             self.widget_settings_layout.addWidget(QLabel("Time Format"))
@@ -394,6 +415,7 @@ class SettingsDialog(QDialog):
             
             self.widget_settings_layout.addWidget(QLabel("iCal URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
+            url_list.setFixedHeight(80)
             for url in settings.get("urls", []):
                 item = QListWidgetItem(url)
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
@@ -419,6 +441,7 @@ class SettingsDialog(QDialog):
             
             self.widget_settings_layout.addWidget(QLabel("RSS URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
+            url_list.setFixedHeight(80)
             for url in settings.get("urls", []):
                 item = QListWidgetItem(url)
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
@@ -472,6 +495,7 @@ class SettingsDialog(QDialog):
              
              self.widget_settings_layout.addWidget(QLabel("Leagues & Teams"))
              config_list = QListWidget(); config_list.setObjectName("sports_config_list")
+             config_list.setFixedHeight(80)
              for cfg in settings.get("configs", []):
                  teams_str = ", ".join(cfg.get("teams", [])) if cfg.get("teams") else "All"
                  config_list.addItem(f"{cfg.get('league')}: {teams_str}")
@@ -534,91 +558,15 @@ class SettingsDialog(QDialog):
             
         elif widget_type == "ip":
             self.widget_settings_layout.addWidget(QLabel("No settings for IP widget"))
-
-    def save_current_widget_ui_to_config(self, *args):
-        widget_name = self.widget_settings_area.property("current_widget")
-        if not widget_name:
-            return
         
-        widget_type = widget_name.split("_")[0]
-        if widget_name not in self.config["widget_settings"]:
-            self.config["widget_settings"][widget_name] = {}
-            
-        settings = self.config["widget_settings"][widget_name]
-
-        if widget_type == "time":
-            combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
-            if combo: settings["format"] = combo.currentText()
-        elif widget_type == "date":
-            combo = self.widget_settings_area.findChild(QComboBox, "date_format_combo")
-            if combo: settings["format"] = combo.currentText()
-        elif widget_type == "worldclock":
-            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if combo: settings["timezone"] = combo.currentText()
-        elif widget_type == "weatherforecast":
-            entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
-            if entry: settings["location"] = entry.text()
-            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if combo: settings["style"] = combo.currentText()
-        elif widget_type == "ical":
-            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if combo: settings["timezone"] = combo.currentText()
-            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if list_widget:
-                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
-        elif widget_type == "rss":
-            entry = self.widget_settings_area.findChild(QLineEdit, "title_entry")
-            if entry: settings["title"] = entry.text()
-            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if list_widget:
-                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
-            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if combo: settings["style"] = combo.currentText()
-            combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
-            if combo: settings["article_count"] = int(combo.currentText())
-            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
-            if entry:
-                try: settings["max_width_chars"] = int(entry.text())
-                except ValueError: pass
-        elif widget_type == "sports":
-            list_widget = self.widget_settings_area.findChild(QListWidget, "sports_config_list")
-            if list_widget:
-                configs = []
-                for i in range(list_widget.count()):
-                    text = list_widget.item(i).text()
-                    parts = text.split(":", 1)
-                    if len(parts) == 2:
-                        league = parts[0].strip()
-                        teams_str = parts[1].strip()
-                        teams = [t.strip() for t in teams_str.split(",")] if teams_str.lower() != 'all' else []
-                        configs.append({"league": league, "teams": teams})
-                settings["configs"] = configs
-            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
-            if combo: settings["timezone"] = combo.currentText()
-            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if combo: settings["style"] = combo.currentText()
-        elif widget_type == "stock":
-            entry = self.widget_settings_area.findChild(QLineEdit, "api_key_entry")
-            if entry: settings["api_key"] = entry.text()
-            entry = self.widget_settings_area.findChild(QLineEdit, "symbols_entry")
-            if entry: settings["symbols"] = [s.strip() for s in entry.text().split(",")]
-            combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
-            if combo: settings["style"] = combo.currentText()
-        elif widget_type == "countdown":
-            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
-            if entry: settings["name"] = entry.text()
-            entry = self.widget_settings_area.findChild(QLineEdit, "countdown_datetime_entry")
-            if entry: settings["datetime"] = entry.text()
-        elif widget_type == "history":
-            entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
-            if entry:
-                try: settings["max_width_chars"] = int(entry.text())
-                except ValueError: pass
+        elif widget_type == "moon":
+            self.widget_settings_layout.addWidget(QLabel("No settings for Moon widget"))
 
     def accept(self):
         self.save_current_widget_ui_to_config()
         self.parent.save_config()
         self.parent.widget_manager.restart_updates() # Restart updates only on save
+        self.parent.restart_camera() # Ensure camera/background changes are applied
         super().accept()
 
     def reject(self):
@@ -634,6 +582,7 @@ class SettingsDialog(QDialog):
         while layout.count():
             child = layout.takeAt(0)
             if child.widget():
+                child.widget().setParent(None)
                 child.widget().deleteLater()
             elif child.layout():
                 self.clear_layout(child.layout())
@@ -681,11 +630,18 @@ class MagicMirrorApp(QMainWindow):
         return available
 
     def is_camera_active(self):
-        return self.config.get("camera_index", -1) != -1 and hasattr(self, "cap") and self.cap.isOpened()
+        # Renaming might be too much refactoring, let's just update logic
+        mode = self.config.get("background_mode", "Camera")
+        if mode == "None": return False
+        if mode == "Image": return self.static_image is not None
+        if mode in ["Camera", "Video", "YouTube"]: return hasattr(self, "cap") and self.cap is not None and self.cap.isOpened()
+        return False
 
     def load_config(self):
         default_config = {
             "camera_index": 0,
+            "background_mode": "Camera",
+            "background_file": "",
             "video_rotation": 0,
             "mirror_video": False,
             "fullscreen": True,
@@ -720,31 +676,70 @@ class MagicMirrorApp(QMainWindow):
             except IOError as e:
                 print(f"Error saving config: {e}")
 
-    def setup_camera(self, camera_index=None):
-        if camera_index is None:
-            camera_index = self.config.get("camera_index", 0)
-
-        if hasattr(self, "cap") and self.cap.isOpened():
+    def setup_camera(self):
+        mode = self.config.get("background_mode", "Camera")
+        
+        if hasattr(self, "cap") and self.cap and self.cap.isOpened():
             self.cap.release()
+        self.cap = None
+        self.static_image = None
 
-        if camera_index == -1:
-            if not (hasattr(self, "timer") and self.timer.isActive()):
-                self.timer = QTimer(self)
-                self.timer.timeout.connect(self.update_camera_feed)
-                self.timer.start(30)
+        if mode == "None":
             self.central_widget.set_pixmap(QPixmap())
+            # Stop timer? Or keep it for widgets?
+            # The timer calls update_camera_feed which calls central_widget.update() if no camera.
+            # So widgets are drawn.
             return
 
-        self.cap = cv2.VideoCapture(camera_index)
-        if not self.cap.isOpened():
-            self.show_error("Could not open camera. Use Settings to pick another device.")
-            return
+        if mode == "Camera":
+            index = self.config.get("camera_index", 0)
+            self.cap = cv2.VideoCapture(index)
+            if not self.cap.isOpened():
+                self.show_error(f"Could not open Camera {index}")
+        
+        elif mode == "Video":
+            path = self.config.get("background_file", "")
+            if os.path.exists(path):
+                self.cap = cv2.VideoCapture(path)
+                if not self.cap.isOpened():
+                    self.show_error(f"Could not open video: {path}")
+            else:
+                self.show_error(f"Video file not found: {path}")
 
+        elif mode == "Image":
+            path = self.config.get("background_file", "")
+            if os.path.exists(path):
+                self.static_image = cv2.imread(path)
+                if self.static_image is None:
+                    self.show_error(f"Could not load image: {path}")
+            else:
+                self.show_error(f"Image file not found: {path}")
+        
+        elif mode == "YouTube":
+            url = self.config.get("background_file", "")
+            if url:
+                try:
+                    import yt_dlp
+                    ydl_opts = {'format': 'best'}
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        video_url = info['url']
+                        self.cap = cv2.VideoCapture(video_url)
+                        if not self.cap.isOpened():
+                            self.show_error(f"Could not open YouTube stream")
+                except ImportError:
+                    self.show_error("yt_dlp not installed. Run: pip install yt_dlp")
+                except Exception as e:
+                    self.show_error(f"YouTube Error: {e}")
+            else:
+                self.show_error("No YouTube URL provided")
+
+        # Ensure timer is running
         if not hasattr(self, "timer") or not self.timer.isActive():
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_camera_feed)
             self.timer.start(30)
-
+            
         self.clear_error_message()
 
     def restart_camera(self):
@@ -776,25 +771,56 @@ class MagicMirrorApp(QMainWindow):
         self.edit_button.setFixedSize(40, 40)
 
     def update_camera_feed(self):
-        if not self.is_camera_active():
+        mode = self.config.get("background_mode", "Camera")
+        
+        frame = None
+        
+        if mode == "None":
             self.central_widget.update()
             return
 
-        ret, frame = self.cap.read()
-        if not ret:
+        if mode == "Image":
+            if self.static_image is not None:
+                frame = self.static_image.copy()
+        
+        elif mode in ["Camera", "Video", "YouTube"]:
+            if self.cap and self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if not ret:
+                    if mode in ["Video", "YouTube"]:
+                        # Loop video
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = self.cap.read()
+                        
+                        # If still no frame (e.g. YouTube stream ended and seek failed), try re-opening
+                        if not ret and mode == "YouTube":
+                             self.cap.release()
+                             self.setup_camera()
+                             if self.cap and self.cap.isOpened():
+                                 ret, frame = self.cap.read()
+                
+                if not ret or frame is None:
+                    # Failed to read
+                    self.central_widget.update()
+                    return
+            else:
+                self.central_widget.update()
+                return
+
+        if frame is not None:
+            # Apply mirror/rotation
+            if self.config.get("mirror_video", False):
+                frame = cv2.flip(frame, 1)
+            rot = self.config.get("video_rotation", 0)
+            if rot != 0:
+                frame = cv2.rotate(frame, [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE][rot - 1])
+
+            h, w, ch = frame.shape
+            q_img = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, ch * w, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_img)
+            self.central_widget.set_pixmap(pixmap)
+        else:
             self.central_widget.update()
-            return
-
-        if self.config.get("mirror_video", False):
-            frame = cv2.flip(frame, 1)
-        rot = self.config.get("video_rotation", 0)
-        if rot != 0:
-            frame = cv2.rotate(frame, [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE][rot - 1])
-
-        h, w, ch = frame.shape
-        q_img = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, ch * w, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_img)
-        self.central_widget.set_pixmap(pixmap)
 
     def update_tickers(self):
         needs_update = False
@@ -836,7 +862,11 @@ class MagicMirrorApp(QMainWindow):
         if not widget:
             return None
         scale_multiplier = self.config.get("text_scale_multiplier", 1.0)
-        final_scale = widget.params["scale"] * scale_multiplier
+        # Apply per-widget font scale
+        widget_settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        widget_scale = widget_settings.get("font_scale", 1.0)
+        
+        final_scale = widget.params["scale"] * scale_multiplier * widget_scale
         font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_scale * 10)
         metrics = QFontMetrics(font)
         text_content = widget.text if getattr(widget, "text", "") else f"({widget_name})"
@@ -867,8 +897,12 @@ class MagicMirrorApp(QMainWindow):
         widget_name = kwargs.get("widget_name")
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         is_ticker = settings.get("style") == "Ticker"
+        
+        # Apply per-widget font scale
+        widget_scale = settings.get("font_scale", 1.0)
+        final_font_scale = font_scale * widget_scale
 
-        font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(font_scale * 10)
+        font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_font_scale * 10)
         painter.setFont(font)
         metrics = painter.fontMetrics()
 
