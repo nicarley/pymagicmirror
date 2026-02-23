@@ -3,10 +3,7 @@ import calendar
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from datetime import datetime, date, timedelta
-import cv2
-import numpy as np
-import math
+from datetime import datetime, date
 import feedparser
 from icalendar import Calendar
 import pytz
@@ -29,15 +26,15 @@ NWS_CACHE = {}
 
 # Using the free, public ESPN APIs
 SPORTS_API_URLS = {
-    "nfl": "http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-    "nba": "http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
-    "mlb": "http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
-    "nhl": "http://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
-    "ncaaf": "http://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-    "ncaamb": "http://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
+    "nfl": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+    "nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+    "mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+    "nhl": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
+    "ncaaf": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+    "ncaamb": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
 }
 
-HISTORY_API_URL = "http://history.muffinlabs.com/date"
+HISTORY_API_URL = "https://history.muffinlabs.com/date"
 
 FMP_API_KEY = os.environ.get("FMP_API_KEY") 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/quote/"
@@ -159,7 +156,7 @@ class BaseWidget:
         else:
             self.text = decorated_text
 
-        if app and app.central_widget:
+        if app and hasattr(app, 'central_widget') and app.central_widget:
             app.central_widget.update()
 
     def set_error(self, err, app, prefix):
@@ -178,6 +175,8 @@ class BaseWidget:
         return self.config.get("feed_refresh_interval_ms", 3600000)
 
     def draw(self, painter, app):
+        if not hasattr(app, 'central_widget') or not app.central_widget:
+            return
         win_width = app.central_widget.width()
         win_height = app.central_widget.height()
         x, y, anchor = self.get_position(win_width, win_height)
@@ -254,7 +253,8 @@ class WorldClockWidget(BaseWidget):
         self.update_timer = app.after(1000, lambda: self.update(app))
 
 class WeatherForecastWidget(BaseWidget):
-    def _get_emoji(self, desc):
+    @staticmethod
+    def _get_emoji(desc):
         for key, emoji in WEATHER_EMOJI_MAP.items():
             if key.lower() in desc.lower():
                 return emoji
@@ -467,8 +467,8 @@ class RssWidget(BaseWidget):
                 self.set_error("fetch", app, "RSS  Error")
                 return
 
-            def _pub(e):
-                return getattr(e, "published_parsed", None) or time.gmtime(0)
+            def _pub(entry):
+                return getattr(entry, "published_parsed", None) or time.gmtime(0)
             entries.sort(key=_pub, reverse=True)
 
             titles = []
@@ -621,7 +621,8 @@ class SportsWidget(BaseWidget):
         
         return "\n".join(output) if output else f"No {league.upper()} games for selected teams."
 
-    def parse_event(self, event, display_tz):
+    @staticmethod
+    def parse_event(event, display_tz):
         competitions = event.get("competitions", [])
         if not competitions:
             return None
@@ -665,7 +666,8 @@ class StockWidget(BaseWidget):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             symbols = widget_settings.get("symbols", ["AAPL", "GOOG"])
-            api_key = self.config.get("FMP_API_KEY", FMP_API_KEY)
+            # Check widget settings for API key first, then global config
+            api_key = widget_settings.get("api_key") or self.config.get("FMP_API_KEY", FMP_API_KEY)
             style = widget_settings.get("style", "Normal")
 
             if not api_key or api_key == "YOUR_FMP_API_KEY":
@@ -721,9 +723,9 @@ class HistoryWidget(BaseWidget):
             events = data.get("data", {}).get("Events", [])
             if events:
                 # Sort events by year (oldest to newest)
-                def get_year(e):
+                def get_year(event):
                     try:
-                        return int(e.get('year', 0))
+                        return int(event.get('year', 0))
                     except ValueError:
                         return 0
                 
@@ -836,10 +838,10 @@ class MoonWidget(BaseWidget):
         try:
             # Simple moon phase calculation
             # Based on Conway's method
-            date = datetime.now()
-            year = date.year
-            month = date.month
-            day = date.day
+            now_date = datetime.now()
+            year = now_date.year
+            month = now_date.month
+            day = now_date.day
 
             if month < 3:
                 year -= 1

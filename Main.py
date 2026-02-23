@@ -1,12 +1,12 @@
 import sys
 import json
 import os
-import threading
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
-    QMessageBox, QSizePolicy, QTabWidget, QComboBox, QInputDialog, QSlider, QColorDialog,
-    QListWidgetItem, QScrollArea, QFileDialog
+    QMessageBox, QSizePolicy, QTabWidget, QComboBox, QSlider, QColorDialog,
+    QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
+    QInputDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker
@@ -35,9 +35,9 @@ class VideoLabel(QLabel):
     def paintEvent(self, event):
         painter = QPainter(self)
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
-            painter.fillRect(self.rect(), Qt.black)
+            painter.fillRect(self.rect(), Qt.GlobalColor.black)
         else:
-            scaled = self._pixmap.scaled(self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
             painter.drawPixmap(self.rect(), scaled)
             
             # Draw background overlay
@@ -68,7 +68,7 @@ class SettingsDialog(QDialog):
         self.parent = parent
         self.original_config = json.loads(json.dumps(parent.config))
         self.config = parent.config
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(900, 600)
 
         self.layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -84,13 +84,24 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self.widget_tab, "Widgets")
         self.setup_widget_tab()
 
-        self.button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         self.layout.addWidget(self.button_box)
 
     def setup_general_tab(self):
-        self.general_layout.addWidget(QLabel("Webcam Device"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        self.general_layout.addWidget(scroll)
+
+        # Camera & Display Group
+        cam_group = QGroupBox("Camera & Display")
+        cam_layout = QFormLayout(cam_group)
+        
         self.camera_combo = QComboBox()
         self.available_cameras = self.parent.detect_available_cameras()
         self.camera_combo.addItem("No Video")
@@ -98,94 +109,96 @@ class SettingsDialog(QDialog):
         
         current_cam_index = self.config.get("camera_index", -1)
         mode = self.config.get("background_mode", "Camera")
-        
         if mode == "None":
             self.camera_combo.setCurrentIndex(0)
         elif current_cam_index in self.available_cameras:
             self.camera_combo.setCurrentIndex(self.available_cameras.index(current_cam_index) + 1)
         else:
-            if self.available_cameras:
-                self.camera_combo.setCurrentIndex(1)
-            else:
-                self.camera_combo.setCurrentIndex(0)
-                
+            self.camera_combo.setCurrentIndex(1 if self.available_cameras else 0)
         self.camera_combo.currentIndexChanged.connect(self.live_update_camera)
-        self.general_layout.addWidget(self.camera_combo)
+        cam_layout.addRow("Webcam Device:", self.camera_combo)
 
         self.mirror_video_check = QCheckBox("Mirror Video")
         self.mirror_video_check.setChecked(self.config.get("mirror_video", False))
         self.mirror_video_check.stateChanged.connect(self.live_update_mirror_video)
-        self.general_layout.addWidget(self.mirror_video_check)
+        cam_layout.addRow("", self.mirror_video_check)
 
         self.fullscreen_check = QCheckBox("Start in Fullscreen")
         self.fullscreen_check.setChecked(self.config.get("fullscreen", True))
         self.fullscreen_check.stateChanged.connect(self.live_update_fullscreen)
-        self.general_layout.addWidget(self.fullscreen_check)
+        cam_layout.addRow("", self.fullscreen_check)
 
         self.rotate_button = QPushButton("Rotate Video 90°")
         self.rotate_button.clicked.connect(lambda: self.parent.rotate_video())
-        self.general_layout.addWidget(self.rotate_button)
+        cam_layout.addRow("Rotation:", self.rotate_button)
+        
+        layout.addWidget(cam_group)
 
-        # Font Selection
-        self.general_layout.addWidget(QLabel("Font Family"))
+        # Appearance Group
+        app_group = QGroupBox("Appearance")
+        app_layout = QFormLayout(app_group)
+
         self.font_combo = QComboBox()
         self.font_combo.addItems(QFontDatabase.families())
-        current_font = self.config.get("font_family", "Helvetica")
-        self.font_combo.setCurrentText(current_font)
+        self.font_combo.setCurrentText(self.config.get("font_family", "Helvetica"))
         self.font_combo.currentTextChanged.connect(self.live_update_font)
-        self.general_layout.addWidget(self.font_combo)
+        app_layout.addRow("Font Family:", self.font_combo)
 
-        # Background Opacity
-        self.general_layout.addWidget(QLabel("Background Dimming"))
-        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
         self.opacity_slider.valueChanged.connect(self.live_update_opacity)
-        self.general_layout.addWidget(self.opacity_slider)
+        app_layout.addRow("Background Dimming:", self.opacity_slider)
 
-        self.general_layout.addWidget(QLabel("Global Text Size"))
-        self.text_size_slider = QSlider(Qt.Horizontal)
+        self.text_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.text_size_slider.setRange(50, 200)
         self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
         self.text_size_slider.valueChanged.connect(self.live_update_text_size)
-        self.general_layout.addWidget(self.text_size_slider)
+        app_layout.addRow("Global Text Size:", self.text_size_slider)
 
-        self.general_layout.addWidget(QLabel("Feed Refresh Interval"))
+        colors_layout = QHBoxLayout()
+        self.text_color_button = QPushButton("Text Color")
+        self.text_color_button.clicked.connect(self.open_text_color_picker)
+        colors_layout.addWidget(self.text_color_button)
+
+        self.shadow_color_button = QPushButton("Shadow Color")
+        self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
+        colors_layout.addWidget(self.shadow_color_button)
+        app_layout.addRow("Colors:", colors_layout)
+
+        layout.addWidget(app_group)
+
+        # System Group
+        sys_group = QGroupBox("System")
+        sys_layout = QFormLayout(sys_group)
+
         self.refresh_interval_combo = QComboBox()
         self.refresh_intervals = {
-            "15 Minutes": 900000,
-            "30 Minutes": 1800000,
-            "1 Hour": 3600000,
-            "2 Hours": 7200000,
-            "6 Hours": 21600000,
-            "12 Hours": 43200000,
-            "24 Hours": 86400000,
+            "15 Minutes": 900000, "30 Minutes": 1800000, "1 Hour": 3600000,
+            "2 Hours": 7200000, "6 Hours": 21600000, "12 Hours": 43200000, "24 Hours": 86400000,
         }
-        self.refresh_interval_combo.addItems(self.refresh_intervals.keys())
+        self.refresh_interval_combo.addItems(list(self.refresh_intervals.keys()))
         current_interval_ms = self.config.get("feed_refresh_interval_ms", 3600000)
         for name, ms in self.refresh_intervals.items():
             if ms == current_interval_ms:
                 self.refresh_interval_combo.setCurrentText(name)
         self.refresh_interval_combo.currentTextChanged.connect(self.live_update_refresh_interval)
-        self.general_layout.addWidget(self.refresh_interval_combo)
-
-        self.text_color_button = QPushButton("Text Color")
-        self.text_color_button.clicked.connect(self.open_text_color_picker)
-        self.general_layout.addWidget(self.text_color_button)
-
-        self.shadow_color_button = QPushButton("Text Shadow Color")
-        self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
-        self.general_layout.addWidget(self.shadow_color_button)
+        sys_layout.addRow("Feed Refresh:", self.refresh_interval_combo)
+        
+        layout.addWidget(sys_group)
+        layout.addStretch()
 
     def open_text_color_picker(self):
-        current_color = QColor(*self.config.get("text_color", [255, 255, 255]))
+        c = self.config.get("text_color", [255, 255, 255])
+        current_color = QColor(c[0], c[1], c[2])
         color = QColorDialog.getColor(current_color, self)
         if color.isValid():
             self.config["text_color"] = [color.red(), color.green(), color.blue()]
             self.parent.central_widget.update()
 
     def open_shadow_color_picker(self):
-        current_color = QColor(*self.config.get("text_shadow_color", [0, 0, 0]))
+        c = self.config.get("text_shadow_color", [0, 0, 0])
+        current_color = QColor(c[0], c[1], c[2])
         color = QColorDialog.getColor(current_color, self)
         if color.isValid():
             self.config["text_shadow_color"] = [color.red(), color.green(), color.blue()]
@@ -225,33 +238,72 @@ class SettingsDialog(QDialog):
         self.parent.widget_manager.restart_updates()
 
     def setup_widget_tab(self):
-        add_remove = QHBoxLayout()
+        # Use existing layout
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.widget_layout.addWidget(splitter)
+
+        # Left Panel: Widget List
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        left_layout.addWidget(QLabel("Active Widgets:"))
+        self.widget_list = QListWidget()
+        self.widget_list.currentItemChanged.connect(self.display_widget_settings)
+        left_layout.addWidget(self.widget_list)
+        
+        # Add/Remove Controls
+        controls_group = QGroupBox("Manage Widgets")
+        controls_layout = QVBoxLayout(controls_group)
+        
+        add_row = QHBoxLayout()
         self.widget_combo = QComboBox()
         self.widget_combo.addItems(sorted(WIDGET_CLASSES.keys()))
-        add_remove.addWidget(self.widget_combo)
-
+        add_row.addWidget(self.widget_combo, 1)
+        
         self.add_button = QPushButton("Add")
         self.add_button.clicked.connect(self.add_widget)
-        add_remove.addWidget(self.add_button)
+        add_row.addWidget(self.add_button)
+        controls_layout.addLayout(add_row)
+        
+        btn_row = QHBoxLayout()
+        self.rename_button = QPushButton("Rename")
+        self.rename_button.clicked.connect(self.rename_widget)
+        btn_row.addWidget(self.rename_button)
 
-        self.remove_button = QPushButton("Remove Selected")
+        self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self.remove_widget)
-        add_remove.addWidget(self.remove_button)
-        self.widget_layout.addLayout(add_remove)
+        btn_row.addWidget(self.remove_button)
+        controls_layout.addLayout(btn_row)
+        
+        left_layout.addWidget(controls_group)
+        splitter.addWidget(left_widget)
 
-        self.widget_list = QListWidget()
-        self.widget_list.currentItemChanged.connect(lambda current, previous: self.display_widget_settings(current))
-        self.widget_layout.addWidget(self.widget_list)
+        # Right Panel: Settings
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(10, 0, 0, 0)
+        
+        self.settings_title = QLabel("Widget Settings")
+        font = self.settings_title.font()
+        font.setPointSize(12)
+        font.setBold(True)
+        self.settings_title.setFont(font)
+        right_layout.addWidget(self.settings_title)
 
-        # Scroll Area for Widget Settings
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        
         self.widget_settings_area = QWidget()
-        self.widget_settings_area.setObjectName("settings_area")
         self.widget_settings_layout = QVBoxLayout(self.widget_settings_area)
+        self.widget_settings_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll_area.setWidget(self.widget_settings_area)
-        self.widget_layout.addWidget(self.scroll_area)
-
+        
+        right_layout.addWidget(self.scroll_area)
+        splitter.addWidget(right_widget)
+        
+        splitter.setSizes([250, 550])
         self.refresh_widget_list()
 
     def refresh_widget_list(self):
@@ -265,7 +317,7 @@ class SettingsDialog(QDialog):
         for name in sorted(self.config.get("widget_positions", {})):
             self.widget_list.addItem(name)
             if name == current:
-                items = self.widget_list.findItems(name, Qt.MatchExactly)
+                items = self.widget_list.findItems(name, Qt.MatchFlag.MatchExactly)
                 if items:
                     self.widget_list.setCurrentItem(items[0])
         
@@ -280,36 +332,23 @@ class SettingsDialog(QDialog):
         widget_name = f"{widget_type}_{i}"
 
         self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
-        if widget_type == "ical":
-            self.config["widget_settings"][widget_name] = {"urls": [], "timezone": "US/Central"}
-        elif widget_type == "rss":
-            self.config["widget_settings"][widget_name] = {"urls": [], "style": "Normal", "title": "", "article_count": 5}
-        elif widget_type == "weatherforecast":
-            self.config["widget_settings"][widget_name] = {"location": "Salem, IL", "style": "Normal"}
-        elif widget_type == "worldclock":
-            self.config["widget_settings"][widget_name] = {"timezone": "UTC"}
-        elif widget_type == "sports":
-            self.config["widget_settings"][widget_name] = {"configs": [], "style": "Normal", "timezone": "UTC"}
-        elif widget_type == "stock":
-            self.config["widget_settings"][widget_name] = {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"}
-        elif widget_type == "date":
-            self.config["widget_settings"][widget_name] = {"format": "%A, %B %d, %Y"}
-        elif widget_type == "history":
-            pass # No settings for history widget
-        elif widget_type == "countdown":
-            self.config["widget_settings"][widget_name] = {"name": "New Event", "datetime": ""}
-        elif widget_type == "quotes":
-            pass
-        elif widget_type == "system":
-            pass
-        elif widget_type == "ip":
-            pass
-        elif widget_type == "moon":
-            pass
+        # Default settings
+        defaults = {
+            "ical": {"urls": [], "timezone": "US/Central"},
+            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5},
+            "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
+            "worldclock": {"timezone": "UTC"},
+            "sports": {"configs": [], "style": "Normal", "timezone": "UTC"},
+            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"},
+            "date": {"format": "%A, %B %d, %Y"},
+            "countdown": {"name": "New Event", "datetime": ""},
+            "history": {"max_width_chars": 50}
+        }
+        self.config["widget_settings"][widget_name] = defaults.get(widget_type, {})
 
         self.parent.widget_manager.load_widgets()
         self.refresh_widget_list()
-        items = self.widget_list.findItems(widget_name, Qt.MatchExactly)
+        items = self.widget_list.findItems(widget_name, Qt.MatchFlag.MatchExactly)
         if items:
             self.widget_list.setCurrentItem(items[0])
 
@@ -319,17 +358,49 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Warning", "Please select a widget to remove.")
             return
         widget_name = current_item.text()
-        reply = QMessageBox.question(self, "Confirm", f"Remove {widget_name}?", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.Yes:
+        reply = QMessageBox.question(self, "Confirm", f"Remove {widget_name}?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
             self.config["widget_positions"].pop(widget_name, None)
             self.config["widget_settings"].pop(widget_name, None)
             self.parent.widget_manager.load_widgets()
             self.refresh_widget_list()
-            self.clear_layout(self.widget_settings_layout)
+            # Clear settings area
+            new_container = QWidget()
+            new_layout = QVBoxLayout(new_container)
+            new_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.scroll_area.setWidget(new_container)
+            self.widget_settings_area = new_container
+            self.widget_settings_layout = new_layout
+            self.settings_title.setText("Widget Settings")
+
+    def rename_widget(self):
+        current_item = self.widget_list.currentItem()
+        if not current_item:
+            return
+        old_name = current_item.text()
+        new_name, ok = QInputDialog.getText(self, "Rename Widget", "New Name:", text=old_name)
+        if ok and new_name and new_name != old_name:
+            if new_name in self.config["widget_positions"]:
+                QMessageBox.warning(self, "Error", "Name already exists.")
+                return
+            
+            # Save current settings first
+            self.save_current_widget_ui_to_config()
+            
+            # Move config
+            self.config["widget_positions"][new_name] = self.config["widget_positions"].pop(old_name)
+            self.config["widget_settings"][new_name] = self.config["widget_settings"].pop(old_name)
+            
+            # Update UI
+            current_item.setText(new_name)
+            self.widget_settings_area.setProperty("current_widget", new_name)
+            self.settings_title.setText(f"Settings: {new_name}")
+            
+            self.parent.widget_manager.load_widgets()
 
     def add_list_item(self, list_widget):
         item = QListWidgetItem("New Item")
-        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         list_widget.addItem(item)
         list_widget.setCurrentItem(item)
         list_widget.editItem(item)
@@ -350,179 +421,172 @@ class SettingsDialog(QDialog):
 
     def display_widget_settings(self, item):
         if not item:
-            self.clear_layout(self.widget_settings_layout)
             return
 
-        if self.widget_settings_area.property("current_widget"):
-             self.save_current_widget_ui_to_config()
-        
-        self.clear_layout(self.widget_settings_layout)
+        new_widget_name = item.text()
+        current_widget_name = self.widget_settings_area.property("current_widget")
 
-        widget_name = item.text()
-        self.widget_settings_area.setProperty("current_widget", widget_name)
-        widget_type = widget_name.split("_")[0]
-        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        # Save previous settings if any
+        if current_widget_name and current_widget_name != new_widget_name:
+             try:
+                 self.save_current_widget_ui_to_config()
+             except Exception as e:
+                 print(f"Error saving settings for {current_widget_name}: {e}")
+        
+        # Create new container to replace the old one (clean slate)
+        new_container = QWidget()
+        new_layout = QVBoxLayout(new_container)
+        new_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        self.widget_settings_area = new_container
+        self.widget_settings_layout = new_layout
+        self.widget_settings_area.setProperty("current_widget", new_widget_name)
+        self.scroll_area.setWidget(new_container)
+
+        self.settings_title.setText(f"Settings: {new_widget_name}")
+        
+        widget_type = new_widget_name.split("_")[0]
+        settings = self.config.get("widget_settings", {}).get(new_widget_name, {})
+
+        # Helper to add rows
+        def add_row(label_text, widget):
+            self.widget_settings_layout.addWidget(QLabel(label_text))
+            self.widget_settings_layout.addWidget(widget)
 
         # Add per-widget font size slider
-        self.widget_settings_layout.addWidget(QLabel("Widget Font Size"))
-        font_slider = QSlider(Qt.Horizontal)
+        font_slider = QSlider(Qt.Orientation.Horizontal)
         font_slider.setObjectName("font_size_slider")
         font_slider.setRange(50, 200)
         font_slider.setValue(int(settings.get("font_scale", 1.0) * 100))
         font_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
-        self.widget_settings_layout.addWidget(font_slider)
+        add_row("Widget Font Scale:", font_slider)
 
         if widget_type == "time":
-            self.widget_settings_layout.addWidget(QLabel("Time Format"))
             combo = QComboBox(); combo.setObjectName("time_format_combo")
             combo.addItems(["24h", "12h"])
             combo.setCurrentText(settings.get("format", "24h"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(combo)
+            add_row("Time Format:", combo)
             
         elif widget_type == "date":
-            self.widget_settings_layout.addWidget(QLabel("Date Format"))
             combo = QComboBox(); combo.setObjectName("date_format_combo")
-            formats = [
-                "%A, %B %d, %Y",
-                "%a, %b %d, %Y",
-                "%m/%d/%Y",
-                "%d.%m.%Y",
-                "%Y-%m-%d"
-            ]
+            formats = ["%A, %B %d, %Y", "%a, %b %d, %Y", "%m/%d/%Y", "%d.%m.%Y", "%Y-%m-%d"]
             combo.addItems(formats)
             combo.setEditable(True)
             combo.setCurrentText(settings.get("format", "%A, %B %d, %Y"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(combo)
+            add_row("Date Format:", combo)
             
         elif widget_type == "worldclock":
-            self.widget_settings_layout.addWidget(QLabel("Timezone"))
             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
             tz_combo.addItems(pytz.all_timezones)
             tz_combo.setCurrentText(settings.get("timezone", "UTC"))
             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(tz_combo)
+            add_row("Timezone:", tz_combo)
+            
+            name_entry = QLineEdit(); name_entry.setObjectName("display_name_entry")
+            name_entry.setText(settings.get("display_name", ""))
+            name_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Display Name:", name_entry)
             
         elif widget_type == "weatherforecast":
-            self.widget_settings_layout.addWidget(QLabel("Location (City, ST)"))
             entry = QLineEdit(); entry.setObjectName("location_entry")
             entry.setText(settings.get("location", "Salem, IL"))
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(entry)
+            add_row("Location (City, ST):", entry)
             
-            self.widget_settings_layout.addWidget(QLabel("Style"))
             combo = QComboBox(); combo.setObjectName("style_combo")
             combo.addItems(["Normal", "Ticker"])
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(combo)
+            add_row("Style:", combo)
 
         elif widget_type == "ical":
-            self.widget_settings_layout.addWidget(QLabel("Timezone"))
             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
             tz_combo.addItems(pytz.all_timezones)
             tz_combo.setCurrentText(settings.get("timezone", "UTC"))
             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(tz_combo)
+            add_row("Timezone:", tz_combo)
             
-            self.widget_settings_layout.addWidget(QLabel("iCal URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.setFixedHeight(80)
+            url_list.setFixedHeight(100)
             for url in settings.get("urls", []):
                 item = QListWidgetItem(url)
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 url_list.addItem(item)
-            self.widget_settings_layout.addWidget(url_list)
-            
-            add_btn = QPushButton("Add URL")
-            add_btn.clicked.connect(lambda: self.add_list_item(url_list))
-            self.widget_settings_layout.addWidget(add_btn)
-            
-            rem_btn = QPushButton("Remove Selected URL")
-            rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
-            self.widget_settings_layout.addWidget(rem_btn)
-            
             url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("iCal URLs:", url_list)
+            
+            btns = QHBoxLayout()
+            add_btn = QPushButton("Add URL"); add_btn.clicked.connect(lambda: self.add_list_item(url_list))
+            rem_btn = QPushButton("Remove"); rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
+            btns.addWidget(add_btn); btns.addWidget(rem_btn)
+            self.widget_settings_layout.addLayout(btns)
 
         elif widget_type == "rss":
-            self.widget_settings_layout.addWidget(QLabel("Feed Title"))
             entry = QLineEdit(); entry.setObjectName("title_entry")
             entry.setText(settings.get("title", ""))
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(entry)
+            add_row("Feed Title:", entry)
             
-            self.widget_settings_layout.addWidget(QLabel("RSS URLs"))
             url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.setFixedHeight(80)
+            url_list.setFixedHeight(100)
             for url in settings.get("urls", []):
                 item = QListWidgetItem(url)
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 url_list.addItem(item)
-            self.widget_settings_layout.addWidget(url_list)
-            
-            add_btn = QPushButton("Add URL")
-            add_btn.clicked.connect(lambda: self.add_list_item(url_list))
-            self.widget_settings_layout.addWidget(add_btn)
-            
-            rem_btn = QPushButton("Remove Selected URL")
-            rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
-            self.widget_settings_layout.addWidget(rem_btn)
-            
             url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("RSS URLs:", url_list)
+            
+            btns = QHBoxLayout()
+            add_btn = QPushButton("Add URL"); add_btn.clicked.connect(lambda: self.add_list_item(url_list))
+            rem_btn = QPushButton("Remove"); rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
+            btns.addWidget(add_btn); btns.addWidget(rem_btn)
+            self.widget_settings_layout.addLayout(btns)
 
-            self.widget_settings_layout.addWidget(QLabel("Style"))
             combo = QComboBox(); combo.setObjectName("style_combo")
             combo.addItems(["Normal", "Ticker"])
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(combo)
+            add_row("Style:", combo)
             
-            self.widget_settings_layout.addWidget(QLabel("Article Count"))
             count_combo = QComboBox(); count_combo.setObjectName("article_count_combo")
             count_combo.addItems([str(i) for i in range(1, 21)])
             count_combo.setCurrentText(str(settings.get("article_count", 5)))
             count_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(count_combo)
+            add_row("Article Count:", count_combo)
             
-            self.widget_settings_layout.addWidget(QLabel("Max Width (Chars)"))
             width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
             width_entry.setText(str(settings.get("max_width_chars", 50)))
             width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(width_entry)
+            add_row("Max Width (Chars):", width_entry)
 
         elif widget_type == "sports":
-             self.widget_settings_layout.addWidget(QLabel("Timezone"))
              tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
              tz_combo.addItems(pytz.all_timezones)
              tz_combo.setCurrentText(settings.get("timezone", "UTC"))
              tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-             self.widget_settings_layout.addWidget(tz_combo)
+             add_row("Timezone:", tz_combo)
              
-             self.widget_settings_layout.addWidget(QLabel("Style"))
              combo = QComboBox(); combo.setObjectName("style_combo")
              combo.addItems(["Normal", "Ticker"])
              combo.setCurrentText(settings.get("style", "Normal"))
              combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-             self.widget_settings_layout.addWidget(combo)
+             add_row("Style:", combo)
              
-             self.widget_settings_layout.addWidget(QLabel("Leagues & Teams"))
              config_list = QListWidget(); config_list.setObjectName("sports_config_list")
-             config_list.setFixedHeight(80)
+             config_list.setFixedHeight(100)
              for cfg in settings.get("configs", []):
                  teams_str = ", ".join(cfg.get("teams", [])) if cfg.get("teams") else "All"
                  config_list.addItem(f"{cfg.get('league')}: {teams_str}")
-             self.widget_settings_layout.addWidget(config_list)
+             add_row("Leagues & Teams:", config_list)
              
              add_layout = QHBoxLayout()
              league_input = QLineEdit(); league_input.setPlaceholderText("League (e.g. nfl)")
              teams_input = QLineEdit(); teams_input.setPlaceholderText("Teams (e.g. CHI, GB) or 'All'")
              add_btn = QPushButton("Add")
-             
              add_btn.clicked.connect(lambda: self.add_sport_config(config_list, league_input, teams_input))
-             add_layout.addWidget(league_input)
-             add_layout.addWidget(teams_input)
-             add_layout.addWidget(add_btn)
+             add_layout.addWidget(league_input); add_layout.addWidget(teams_input); add_layout.addWidget(add_btn)
              self.widget_settings_layout.addLayout(add_layout)
              
              rem_btn = QPushButton("Remove Selected")
@@ -530,59 +594,41 @@ class SettingsDialog(QDialog):
              self.widget_settings_layout.addWidget(rem_btn)
 
         elif widget_type == "stock":
-            self.widget_settings_layout.addWidget(QLabel("API Key (FMP)"))
             entry = QLineEdit(); entry.setObjectName("api_key_entry")
             entry.setText(settings.get("api_key", ""))
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(entry)
+            add_row("API Key (FMP):", entry)
             
-            self.widget_settings_layout.addWidget(QLabel("Symbols (comma separated)"))
             sym_entry = QLineEdit(); sym_entry.setObjectName("symbols_entry")
             sym_entry.setText(", ".join(settings.get("symbols", [])))
             sym_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(sym_entry)
+            add_row("Symbols (comma sep):", sym_entry)
             
-            self.widget_settings_layout.addWidget(QLabel("Style"))
             combo = QComboBox(); combo.setObjectName("style_combo")
             combo.addItems(["Normal", "Ticker"])
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(combo)
+            add_row("Style:", combo)
 
         elif widget_type == "countdown":
-            self.widget_settings_layout.addWidget(QLabel("Event Name"))
             entry = QLineEdit(); entry.setObjectName("countdown_name_entry")
             entry.setText(settings.get("name", ""))
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(entry)
+            add_row("Event Name:", entry)
             
-            self.widget_settings_layout.addWidget(QLabel("Date Time (YYYY-MM-DD HH:MM)"))
             dt_entry = QLineEdit(); dt_entry.setObjectName("countdown_datetime_entry")
             dt_entry.setText(settings.get("datetime", ""))
             dt_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(dt_entry)
+            add_row("Date Time (YYYY-MM-DD HH:MM):", dt_entry)
 
         elif widget_type == "history":
-            self.widget_settings_layout.addWidget(QLabel("Max Width (Chars)"))
             width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
             width_entry.setText(str(settings.get("max_width_chars", 50)))
             width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            self.widget_settings_layout.addWidget(width_entry)
+            add_row("Max Width (Chars):", width_entry)
             
-        elif widget_type == "ip":
-            self.widget_settings_layout.addWidget(QLabel("No settings for IP widget"))
-        
-        elif widget_type == "moon":
-            self.widget_settings_layout.addWidget(QLabel("No settings for Moon widget"))
-        
-        elif widget_type == "calendar":
-            self.widget_settings_layout.addWidget(QLabel("No settings for Calendar widget"))
-            
-        elif widget_type == "quotes":
-            self.widget_settings_layout.addWidget(QLabel("No settings for Quotes widget"))
-            
-        elif widget_type == "system":
-            self.widget_settings_layout.addWidget(QLabel("No settings for System Stats widget"))
+        else:
+            self.widget_settings_layout.addWidget(QLabel("No specific settings for this widget."))
 
     def save_current_widget_ui_to_config(self, *args):
         widget_name = self.widget_settings_area.property("current_widget")
@@ -610,6 +656,8 @@ class SettingsDialog(QDialog):
         elif widget_type == "worldclock":
             combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
             if combo: settings["timezone"] = combo.currentText()
+            entry = self.widget_settings_area.findChild(QLineEdit, "display_name_entry")
+            if entry: settings["display_name"] = entry.text()
         elif widget_type == "weatherforecast":
             entry = self.widget_settings_area.findChild(QLineEdit, "location_entry")
             if entry: settings["location"] = entry.text()
@@ -707,8 +755,8 @@ class MagicMirrorApp(QMainWindow):
         self.setWindowTitle("Magic Mirror")
         self.central_widget = VideoLabel(self)
         self.setCentralWidget(self.central_widget)
-        self.central_widget.setAlignment(Qt.AlignLeft)
-        self.central_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.central_widget.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.central_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.central_widget.setMouseTracking(True)
         self.central_widget.mousePressEvent = self.central_widget_mouse_press
@@ -728,7 +776,8 @@ class MagicMirrorApp(QMainWindow):
         # Start Web Server
         self.web_server = web_server.start_server(self, port=815)
 
-    def detect_available_cameras(self):
+    @staticmethod
+    def detect_available_cameras():
         available = []
         for i in range(10):
             cap = cv2.VideoCapture(i)
@@ -924,7 +973,7 @@ class MagicMirrorApp(QMainWindow):
                 frame = cv2.rotate(frame, [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE][rot - 1])
 
             h, w, ch = frame.shape
-            q_img = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, ch * w, QImage.Format_RGB888)
+            q_img = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, ch * w, QImage.Format.Format_RGB888)
             pixmap = QPixmap.fromImage(q_img)
             self.central_widget.set_pixmap(pixmap)
         else:
@@ -953,7 +1002,8 @@ class MagicMirrorApp(QMainWindow):
                     if bbox:
                         painter.drawRect(bbox)
 
-    def _get_top_left_for_anchor(self, anchor, anchor_point, width, height):
+    @staticmethod
+    def _get_top_left_for_anchor(anchor, anchor_point, width, height):
         x, y = anchor_point
         if "e" in anchor:
             x -= width
@@ -1041,18 +1091,21 @@ class MagicMirrorApp(QMainWindow):
 
             baseline_y = y + metrics.ascent() - metrics.height()/2
             
-            painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
+            c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
+            painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
             painter.drawText(QPoint(int(x) + 2, int(baseline_y) + 2), text)
-            painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
+            
+            c_text = self.config.get("text_color", [255, 255, 255])
+            painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
             painter.drawText(QPoint(int(x), int(baseline_y)), text)
             
             # Draw the text again if it's scrolling off the screen to create a seamless loop
             gap = 50
             if x + text_width < self.central_widget.width():
                 x2 = x + text_width + gap
-                painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
+                painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
                 painter.drawText(QPoint(int(x2) + 2, int(baseline_y) + 2), text)
-                painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
+                painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
                 painter.drawText(QPoint(int(x2), int(baseline_y)), text)
                 
                 # Reset scroll logic for infinite loop
@@ -1072,7 +1125,7 @@ class MagicMirrorApp(QMainWindow):
             # We draw a rounded rect behind the text block
             bg_rect = QRect(int(x) - 10, int(y) - 5, int(max_width) + 20, int(total_height) + 10)
             painter.setBrush(QBrush(QColor(0, 0, 0, 100))) # Semi-transparent black
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(bg_rect, 10, 10)
 
             for i, line in enumerate(lines):
@@ -1089,13 +1142,16 @@ class MagicMirrorApp(QMainWindow):
                     font.setBold(False)
                     painter.setFont(font)
 
-                painter.setPen(QColor(*self.config.get("text_shadow_color", [0, 0, 0])))
+                c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
+                painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
                 painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
-                painter.setPen(QColor(*self.config.get("text_color", [255, 255, 255])))
+                
+                c_text = self.config.get("text_color", [255, 255, 255])
+                painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
                 painter.drawText(QPoint(int(line_x), int(baseline_y)), line)
 
     def central_widget_mouse_press(self, event):
-        if self.edit_mode and event.button() == Qt.LeftButton:
+        if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
             with QMutexLocker(self.config_mutex):
                 for name in reversed(list(self.config["widget_positions"])):
                     bbox = self.get_widget_bbox(name)
@@ -1118,29 +1174,31 @@ class MagicMirrorApp(QMainWindow):
                         return
 
     def central_widget_mouse_move(self, event):
-        if self.edit_mode and self.drag_data["widget"] and event.buttons() & Qt.LeftButton:
+        if self.edit_mode and self.drag_data["widget"] and event.buttons() & Qt.MouseButton.LeftButton:
             delta = event.position().toPoint() - self.drag_data["start_pos"]
             if self.central_widget.width() == 0 or self.central_widget.height() == 0:
                 return
             
-            with QMutexLocker(self.config_mutex):
-                new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
-                new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
-                self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
-                self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
-            self.central_widget.update()
+            # Check if start_widget_pos is available
+            if self.drag_data.get("start_widget_pos"):
+                with QMutexLocker(self.config_mutex):
+                    new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
+                    new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
+                    self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
+                    self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
+                self.central_widget.update()
 
     def central_widget_mouse_release(self, event):
-        if self.edit_mode and self.drag_data["widget"] and event.button() == Qt.LeftButton:
+        if self.edit_mode and self.drag_data["widget"] and event.button() == Qt.MouseButton.LeftButton:
             self.drag_data["widget"] = None
             self.save_config()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.set_fullscreen(False)
-        elif event.key() == Qt.Key_F11:
+        elif event.key() == Qt.Key.Key_F11:
             self.set_fullscreen(not self.isFullScreen())
-        elif event.key() == Qt.Key_E:
+        elif event.key() == Qt.Key.Key_E:
             self.edit_button.toggle()
 
     def open_settings_dialog(self):
@@ -1187,7 +1245,7 @@ class MagicMirrorApp(QMainWindow):
         
         # Convert to JPEG
         byte_array = QBuffer()
-        byte_array.open(QIODevice.WriteOnly)
+        byte_array.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(byte_array, "JPG")
         return byte_array.data().data()
 
