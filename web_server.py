@@ -90,9 +90,11 @@ HTML_TEMPLATE = """
     <header>
         <h1>MagicMirror Control</h1>
         <div>
-            <button class="secondary" onclick="openFullscreen()">Full Preview</button>
-            <button class="secondary" onclick="refreshPreview()">Refresh Preview</button>
-            <button onclick="saveConfig()">Save Changes</button>
+            <button id="start-stream-btn" class="secondary" onclick="startStream()">Start Stream</button>
+            <button id="stop-stream-btn" class="secondary" onclick="stopStream()" style="display:none;">Stop Stream</button>
+            <button class="secondary hide-during-stream" onclick="openFullscreen()">Full Preview</button>
+            <button class="secondary hide-during-stream" onclick="refreshPreview()">Refresh Preview</button>
+            <button class="hide-during-stream" onclick="saveConfig()">Save Changes</button>
         </div>
     </header>
     <div id="container">
@@ -120,6 +122,7 @@ HTML_TEMPLATE = """
         let draggedEl = null;
         let dragOffset = {x: 0, y: 0};
         let fullscreenInterval = null;
+        let streamInterval = null;
         
         // Available widget types (hardcoded for now, could be fetched)
         const WIDGET_TYPES = [
@@ -148,6 +151,39 @@ HTML_TEMPLATE = """
             if (document.getElementById('fullscreen-modal').style.display === 'flex') {
                 fsImg.src = '/api/preview?t=' + t;
             }
+        }
+
+        function startStream() {
+            if (streamInterval) return;
+            streamInterval = setInterval(refreshPreview, 100); // 10 FPS
+            document.getElementById('start-stream-btn').style.display = 'none';
+            document.getElementById('stop-stream-btn').style.display = 'inline-block';
+            
+            // Hide settings and other buttons
+            document.getElementById('settings-pane').style.display = 'none';
+            document.querySelectorAll('.hide-during-stream').forEach(el => el.style.display = 'none');
+            
+            // Hide widget boxes
+            document.getElementById('overlay').innerHTML = '';
+
+            // Resize overlay to match new layout
+            setTimeout(resizeOverlay, 50);
+        }
+
+        function stopStream() {
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+            }
+            document.getElementById('start-stream-btn').style.display = 'inline-block';
+            document.getElementById('stop-stream-btn').style.display = 'none';
+            
+            // Show settings and other buttons
+            document.getElementById('settings-pane').style.display = 'flex';
+            document.querySelectorAll('.hide-during-stream').forEach(el => el.style.display = 'inline-block');
+            
+            // Redraw widget boxes and resize overlay
+            setTimeout(resizeOverlay, 50);
         }
 
         function openFullscreen() {
@@ -198,7 +234,10 @@ HTML_TEMPLATE = """
             overlay.style.left = left + 'px';
             overlay.style.top = top + 'px';
             
-            renderWidgets();
+            // Only render widgets if not streaming
+            if (!streamInterval) {
+                renderWidgets();
+            }
         }
 
         img.onload = resizeOverlay;
@@ -538,7 +577,7 @@ HTML_TEMPLATE = """
         loadConfig();
         
         setInterval(() => {
-            if (!draggedEl) refreshPreview();
+            if (!draggedEl && !streamInterval) refreshPreview();
         }, 5000);
     </script>
 </body>

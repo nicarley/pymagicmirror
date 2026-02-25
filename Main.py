@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QSlider, QColorDialog,
     QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
-    QInputDialog
+    QInputDialog, QFileDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker
@@ -102,21 +102,53 @@ class SettingsDialog(QDialog):
         cam_group = QGroupBox("Camera & Display")
         cam_layout = QFormLayout(cam_group)
         
-        self.camera_combo = QComboBox()
-        self.available_cameras = self.parent.detect_available_cameras()
-        self.camera_combo.addItem("No Video")
-        self.camera_combo.addItems([f"Camera {i}" for i in self.available_cameras])
+        self.background_mode_combo = QComboBox()
+        self.background_mode_combo.addItem("None")
+        self.background_mode_combo.addItem("Camera")
+        self.background_mode_combo.addItem("Image")
+        self.background_mode_combo.addItem("Video")
+        self.background_mode_combo.addItem("YouTube")
         
-        current_cam_index = self.config.get("camera_index", -1)
-        mode = self.config.get("background_mode", "Camera")
-        if mode == "None":
-            self.camera_combo.setCurrentIndex(0)
-        elif current_cam_index in self.available_cameras:
-            self.camera_combo.setCurrentIndex(self.available_cameras.index(current_cam_index) + 1)
-        else:
-            self.camera_combo.setCurrentIndex(1 if self.available_cameras else 0)
-        self.camera_combo.currentIndexChanged.connect(self.live_update_camera)
-        cam_layout.addRow("Webcam Device:", self.camera_combo)
+        # Add available cameras
+        self.available_cameras = self.parent.detect_available_cameras()
+        for i in self.available_cameras:
+            self.background_mode_combo.addItem(f"Camera {i}")
+
+        current_mode = self.config.get("background_mode", "Camera")
+        current_cam_index = self.config.get("camera_index", 0)
+        
+        # Set initial selection
+        if current_mode == "None":
+            self.background_mode_combo.setCurrentText("None")
+        elif current_mode == "Image":
+            self.background_mode_combo.setCurrentText("Image")
+        elif current_mode == "Video":
+            self.background_mode_combo.setCurrentText("Video")
+        elif current_mode == "YouTube":
+            self.background_mode_combo.setCurrentText("YouTube")
+        elif current_mode == "Camera":
+            if current_cam_index in self.available_cameras:
+                self.background_mode_combo.setCurrentText(f"Camera {current_cam_index}")
+            else:
+                self.background_mode_combo.setCurrentText("Camera") # Fallback
+
+        self.background_mode_combo.currentIndexChanged.connect(self.live_update_background_mode)
+        cam_layout.addRow("Background Mode:", self.background_mode_combo)
+
+        # File selection for Image/Video
+        file_layout = QHBoxLayout()
+        self.background_file_input = QLineEdit()
+        self.background_file_input.setText(self.config.get("background_file", ""))
+        self.background_file_input.textChanged.connect(self.live_update_background_file)
+        self.browse_button = QPushButton("Browse...")
+        self.browse_button.clicked.connect(self.select_background_file)
+        file_layout.addWidget(self.background_file_input)
+        file_layout.addWidget(self.browse_button)
+        
+        self.file_row_label = QLabel("File Path / URL:")
+        self.file_row_widget = QWidget()
+        self.file_row_widget.setLayout(file_layout)
+        cam_layout.addRow(self.file_row_label, self.file_row_widget)
 
         self.mirror_video_check = QCheckBox("Mirror Video")
         self.mirror_video_check.setChecked(self.config.get("mirror_video", False))
@@ -133,6 +165,9 @@ class SettingsDialog(QDialog):
         cam_layout.addRow("Rotation:", self.rotate_button)
         
         layout.addWidget(cam_group)
+        
+        # Initial UI state update
+        self.update_background_ui_state()
 
         # Appearance Group
         app_group = QGroupBox("Appearance")
@@ -185,6 +220,11 @@ class SettingsDialog(QDialog):
         self.refresh_interval_combo.currentTextChanged.connect(self.live_update_refresh_interval)
         sys_layout.addRow("Feed Refresh:", self.refresh_interval_combo)
         
+        self.web_server_check = QCheckBox("Enable Web Management")
+        self.web_server_check.setChecked(self.config.get("web_server_enabled", False))
+        self.web_server_check.stateChanged.connect(self.live_update_web_server)
+        sys_layout.addRow("", self.web_server_check)
+
         layout.addWidget(sys_group)
         layout.addStretch()
 
@@ -205,13 +245,61 @@ class SettingsDialog(QDialog):
             self.parent.central_widget.update()
 
     def live_update_camera(self, index):
-        if index == 0:
+        self.live_update_background_mode(index)
+
+    def live_update_background_mode(self, index):
+        text = self.background_mode_combo.currentText()
+        
+        if text == "None":
             self.config["background_mode"] = "None"
-        else:
+        elif text == "Image":
+            self.config["background_mode"] = "Image"
+        elif text == "Video":
+            self.config["background_mode"] = "Video"
+        elif text == "YouTube":
+            self.config["background_mode"] = "YouTube"
+        elif text.startswith("Camera"):
             self.config["background_mode"] = "Camera"
-            if self.available_cameras:
-                self.config["camera_index"] = self.available_cameras[index - 1]
+            try:
+                cam_idx = int(text.split(" ")[1])
+                self.config["camera_index"] = cam_idx
+            except (IndexError, ValueError):
+                pass
+        
+        self.update_background_ui_state()
         self.parent.restart_camera()
+
+    def update_background_ui_state(self):
+        mode = self.config.get("background_mode", "Camera")
+        show_file = mode in ["Image", "Video", "YouTube"]
+        self.file_row_label.setVisible(show_file)
+        self.file_row_widget.setVisible(show_file)
+        self.browse_button.setVisible(mode != "YouTube") # No browse for YouTube
+        
+        if mode == "YouTube":
+            self.background_file_input.setPlaceholderText("Enter YouTube URL")
+        else:
+            self.background_file_input.setPlaceholderText("Path to file")
+
+    def select_background_file(self):
+        mode = self.config.get("background_mode", "Image")
+        if mode == "Image":
+            file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        elif mode == "Video":
+            file_path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Videos (*.mp4 *.avi *.mkv *.mov)")
+        else:
+            return
+
+        if file_path:
+            self.background_file_input.setText(file_path)
+            self.config["background_file"] = file_path
+            self.parent.restart_camera()
+
+    def live_update_background_file(self, text):
+        self.config["background_file"] = text
+        # Only restart if it's a valid path or URL to avoid constant restarting while typing
+        if os.path.exists(text) or (self.config.get("background_mode") == "YouTube" and len(text) > 10):
+             self.parent.restart_camera()
 
     def live_update_mirror_video(self, state):
         self.config["mirror_video"] = self.mirror_video_check.isChecked()
@@ -236,6 +324,14 @@ class SettingsDialog(QDialog):
     def live_update_refresh_interval(self, text):
         self.config["feed_refresh_interval_ms"] = self.refresh_intervals[text]
         self.parent.widget_manager.restart_updates()
+
+    def live_update_web_server(self, state):
+        is_enabled = self.web_server_check.isChecked()
+        self.config["web_server_enabled"] = is_enabled
+        if is_enabled:
+            self.parent.start_web_server()
+        else:
+            self.parent.stop_web_server()
 
     def setup_widget_tab(self):
         # Use existing layout
@@ -478,182 +574,6 @@ class SettingsDialog(QDialog):
             add_row("Date Format:", combo)
             
         elif widget_type == "worldclock":
-            tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
-            tz_combo.addItems(pytz.all_timezones)
-            tz_combo.setCurrentText(settings.get("timezone", "UTC"))
-            tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Timezone:", tz_combo)
-            
-            name_entry = QLineEdit(); name_entry.setObjectName("display_name_entry")
-            name_entry.setText(settings.get("display_name", ""))
-            name_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Display Name:", name_entry)
-            
-        elif widget_type == "weatherforecast":
-            entry = QLineEdit(); entry.setObjectName("location_entry")
-            entry.setText(settings.get("location", "Salem, IL"))
-            entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Location (City, ST):", entry)
-            
-            combo = QComboBox(); combo.setObjectName("style_combo")
-            combo.addItems(["Normal", "Ticker"])
-            combo.setCurrentText(settings.get("style", "Normal"))
-            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Style:", combo)
-
-        elif widget_type == "ical":
-            tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
-            tz_combo.addItems(pytz.all_timezones)
-            tz_combo.setCurrentText(settings.get("timezone", "UTC"))
-            tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Timezone:", tz_combo)
-            
-            url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.setFixedHeight(100)
-            for url in settings.get("urls", []):
-                item = QListWidgetItem(url)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                url_list.addItem(item)
-            url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("iCal URLs:", url_list)
-            
-            btns = QHBoxLayout()
-            add_btn = QPushButton("Add URL"); add_btn.clicked.connect(lambda: self.add_list_item(url_list))
-            rem_btn = QPushButton("Remove"); rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
-            btns.addWidget(add_btn); btns.addWidget(rem_btn)
-            self.widget_settings_layout.addLayout(btns)
-
-        elif widget_type == "rss":
-            entry = QLineEdit(); entry.setObjectName("title_entry")
-            entry.setText(settings.get("title", ""))
-            entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Feed Title:", entry)
-            
-            url_list = QListWidget(); url_list.setObjectName("url_list")
-            url_list.setFixedHeight(100)
-            for url in settings.get("urls", []):
-                item = QListWidgetItem(url)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                url_list.addItem(item)
-            url_list.itemChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("RSS URLs:", url_list)
-            
-            btns = QHBoxLayout()
-            add_btn = QPushButton("Add URL"); add_btn.clicked.connect(lambda: self.add_list_item(url_list))
-            rem_btn = QPushButton("Remove"); rem_btn.clicked.connect(lambda: self.remove_list_item(url_list))
-            btns.addWidget(add_btn); btns.addWidget(rem_btn)
-            self.widget_settings_layout.addLayout(btns)
-
-            combo = QComboBox(); combo.setObjectName("style_combo")
-            combo.addItems(["Normal", "Ticker"])
-            combo.setCurrentText(settings.get("style", "Normal"))
-            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Style:", combo)
-            
-            count_combo = QComboBox(); count_combo.setObjectName("article_count_combo")
-            count_combo.addItems([str(i) for i in range(1, 21)])
-            count_combo.setCurrentText(str(settings.get("article_count", 5)))
-            count_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Article Count:", count_combo)
-            
-            width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
-            width_entry.setText(str(settings.get("max_width_chars", 50)))
-            width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Max Width (Chars):", width_entry)
-
-        elif widget_type == "sports":
-             tz_combo = QComboBox(); tz_combo.setObjectName("tz_combo")
-             tz_combo.addItems(pytz.all_timezones)
-             tz_combo.setCurrentText(settings.get("timezone", "UTC"))
-             tz_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-             add_row("Timezone:", tz_combo)
-             
-             combo = QComboBox(); combo.setObjectName("style_combo")
-             combo.addItems(["Normal", "Ticker"])
-             combo.setCurrentText(settings.get("style", "Normal"))
-             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-             add_row("Style:", combo)
-             
-             config_list = QListWidget(); config_list.setObjectName("sports_config_list")
-             config_list.setFixedHeight(100)
-             for cfg in settings.get("configs", []):
-                 teams_str = ", ".join(cfg.get("teams", [])) if cfg.get("teams") else "All"
-                 config_list.addItem(f"{cfg.get('league')}: {teams_str}")
-             add_row("Leagues & Teams:", config_list)
-             
-             add_layout = QHBoxLayout()
-             league_input = QLineEdit(); league_input.setPlaceholderText("League (e.g. nfl)")
-             teams_input = QLineEdit(); teams_input.setPlaceholderText("Teams (e.g. CHI, GB) or 'All'")
-             add_btn = QPushButton("Add")
-             add_btn.clicked.connect(lambda: self.add_sport_config(config_list, league_input, teams_input))
-             add_layout.addWidget(league_input); add_layout.addWidget(teams_input); add_layout.addWidget(add_btn)
-             self.widget_settings_layout.addLayout(add_layout)
-             
-             rem_btn = QPushButton("Remove Selected")
-             rem_btn.clicked.connect(lambda: self.remove_list_item(config_list))
-             self.widget_settings_layout.addWidget(rem_btn)
-
-        elif widget_type == "stock":
-            entry = QLineEdit(); entry.setObjectName("api_key_entry")
-            entry.setText(settings.get("api_key", ""))
-            entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("API Key (FMP):", entry)
-            
-            sym_entry = QLineEdit(); sym_entry.setObjectName("symbols_entry")
-            sym_entry.setText(", ".join(settings.get("symbols", [])))
-            sym_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Symbols (comma sep):", sym_entry)
-            
-            combo = QComboBox(); combo.setObjectName("style_combo")
-            combo.addItems(["Normal", "Ticker"])
-            combo.setCurrentText(settings.get("style", "Normal"))
-            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Style:", combo)
-
-        elif widget_type == "countdown":
-            entry = QLineEdit(); entry.setObjectName("countdown_name_entry")
-            entry.setText(settings.get("name", ""))
-            entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Event Name:", entry)
-            
-            dt_entry = QLineEdit(); dt_entry.setObjectName("countdown_datetime_entry")
-            dt_entry.setText(settings.get("datetime", ""))
-            dt_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Date Time (YYYY-MM-DD HH:MM):", dt_entry)
-
-        elif widget_type == "history":
-            width_entry = QLineEdit(); width_entry.setObjectName("max_width_entry")
-            width_entry.setText(str(settings.get("max_width_chars", 50)))
-            width_entry.textChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Max Width (Chars):", width_entry)
-            
-        else:
-            self.widget_settings_layout.addWidget(QLabel("No specific settings for this widget."))
-
-    def save_current_widget_ui_to_config(self, *args):
-        widget_name = self.widget_settings_area.property("current_widget")
-        if not widget_name:
-            return
-        
-        widget_type = widget_name.split("_")[0]
-        if widget_name not in self.config["widget_settings"]:
-            self.config["widget_settings"][widget_name] = {}
-            
-        settings = self.config["widget_settings"][widget_name]
-
-        # Save per-widget font size
-        slider = self.widget_settings_area.findChild(QSlider, "font_size_slider")
-        if slider:
-            settings["font_scale"] = slider.value() / 100.0
-            self.parent.central_widget.update() # Live update
-
-        if widget_type == "time":
-            combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
-            if combo: settings["format"] = combo.currentText()
-        elif widget_type == "date":
-            combo = self.widget_settings_area.findChild(QComboBox, "date_format_combo")
-            if combo: settings["format"] = combo.currentText()
-        elif widget_type == "worldclock":
             combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
             if combo: settings["timezone"] = combo.currentText()
             entry = self.widget_settings_area.findChild(QLineEdit, "display_name_entry")
@@ -732,6 +652,10 @@ class SettingsDialog(QDialog):
         self.parent.restart_camera()
         self.parent.widget_manager.config = self.parent.config
         self.parent.widget_manager.load_widgets()
+        if self.original_config.get("web_server_enabled"):
+            self.parent.start_web_server()
+        else:
+            self.parent.stop_web_server()
         super().reject()
 
     def clear_layout(self, layout):
@@ -750,6 +674,9 @@ class MagicMirrorApp(QMainWindow):
         self.drag_data = {"widget": None, "start_pos": None, "start_widget_pos": None}
         self.error_message = ""
         self.config_mutex = QMutex()
+        self.web_server = None
+        self.preview_image_data = None
+        self.preview_image_mutex = QMutex()
         self.load_config()
 
         self.setWindowTitle("Magic Mirror")
@@ -773,8 +700,14 @@ class MagicMirrorApp(QMainWindow):
         self.ticker_timer.timeout.connect(self.update_tickers)
         self.ticker_timer.start(30)
 
-        # Start Web Server
-        self.web_server = web_server.start_server(self, port=815)
+        # Preview capture timer for thread-safe streaming
+        self.preview_capture_timer = QTimer(self)
+        self.preview_capture_timer.timeout.connect(self.update_preview_image)
+        self.preview_capture_timer.start(100) # Capture at 10 FPS
+
+        # Start Web Server if enabled
+        if self.config.get("web_server_enabled", False):
+            self.start_web_server()
 
     @staticmethod
     def detect_available_cameras():
@@ -810,7 +743,8 @@ class MagicMirrorApp(QMainWindow):
             "text_shadow_color": [0, 0, 0],
             "FMP_API_KEY": "YOUR_FMP_API_KEY",
             "font_family": "Helvetica",
-            "background_opacity": 0.0
+            "background_opacity": 0.0,
+            "web_server_enabled": False
         }
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
@@ -1233,21 +1167,21 @@ class MagicMirrorApp(QMainWindow):
         t.start(ms)
         return t
 
-    def get_preview_image(self):
-        # Capture the current state of the central widget
+    def update_preview_image(self):
         if not self.central_widget:
-            return None
+            return
         
-        # We can grab the pixmap from the widget, but it might be better to render it
-        # to ensure we get the latest state including overlays.
-        # However, grab() is usually sufficient.
         pixmap = self.central_widget.grab()
-        
-        # Convert to JPEG
         byte_array = QBuffer()
         byte_array.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(byte_array, "JPG")
-        return byte_array.data().data()
+        
+        with QMutexLocker(self.preview_image_mutex):
+            self.preview_image_data = byte_array.data().data()
+
+    def get_preview_image(self):
+        with QMutexLocker(self.preview_image_mutex):
+            return self.preview_image_data
 
     def handle_remote_config_update(self):
         # Called from the web server thread when config is updated
@@ -1270,6 +1204,21 @@ class MagicMirrorApp(QMainWindow):
             self.widget_manager.config = self.config
             self.widget_manager.load_widgets()
         self.central_widget.update()
+
+    def start_web_server(self):
+        if self.web_server is None:
+            try:
+                self.web_server = web_server.start_server(self, port=815)
+                print("Web server started on port 815.")
+            except Exception as e:
+                print(f"Failed to start web server: {e}")
+                self.web_server = None
+
+    def stop_web_server(self):
+        if self.web_server:
+            self.web_server.shutdown()
+            self.web_server = None
+            print("Web server stopped.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
