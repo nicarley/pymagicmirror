@@ -722,7 +722,7 @@ class SettingsDialog(QDialog):
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Max Width (chars):", entry)
 
-    def save_current_widget_ui_to_config(self):
+    def save_current_widget_ui_to_config(self, *args): # Modified to accept *args
         widget_name = self.widget_settings_area.property("current_widget")
         if not widget_name:
             return
