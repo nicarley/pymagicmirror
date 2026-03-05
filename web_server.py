@@ -127,7 +127,7 @@ HTML_TEMPLATE = """
         // Available widget types (hardcoded for now, could be fetched)
         const WIDGET_TYPES = [
             "time", "date", "worldclock", "calendar", "weatherforecast", 
-            "ical", "rss", "sports", "stock", "history", "countdown", 
+            "ical", "commute", "dailyagenda", "photomemories", "rss", "sports", "stock", "history", "countdown", 
             "quotes", "system", "ip", "moon"
         ];
 
@@ -329,6 +329,16 @@ HTML_TEMPLATE = """
             
             const defaults = {};
             if (type === "ical") defaults.urls = [], defaults.timezone = "US/Central";
+            else if (type === "commute") { defaults.urls = []; defaults.timezone = "US/Central"; defaults.commute_minutes = 25; defaults.prep_minutes = 10; defaults.lookahead_hours = 24; }
+            else if (type === "dailyagenda") { defaults.urls = []; defaults.timezone = "US/Central"; defaults.max_events = 6; defaults.days_ahead = 3; }
+            else if (type === "photomemories") {
+                defaults.source_mode = "folder";
+                defaults.single_file = "";
+                defaults.folder = "";
+                defaults.refresh_minutes = 60;
+                defaults.max_name_chars = 45;
+                defaults.image_scale = 0.35;
+            }
             else if (type === "rss") { defaults.urls = []; defaults.style = "Normal"; defaults.title = ""; defaults.article_count = 5; defaults.max_width_chars = 50; }
             else if (type === "weatherforecast") { defaults.location = "Salem, IL"; defaults.style = "Normal"; }
             else if (type === "worldclock") defaults.timezone = "UTC";

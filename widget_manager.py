@@ -3,7 +3,7 @@ import calendar
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import feedparser
 from icalendar import Calendar
 import pytz
@@ -69,6 +69,8 @@ DEFAULT_QUOTES = [
     "Carpe Diem.",
 ]
 
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+
 def make_session():
     s = requests.Session()
     s.headers.update({"User-Agent": USER_AGENT})
@@ -86,6 +88,65 @@ def make_session():
     return s
 
 SESSION = make_session()
+
+def collect_ical_urls(config, widget_name):
+    widget_settings = config.get("widget_settings", {}).get(widget_name, {})
+    urls = widget_settings.get("urls", [])
+    if urls:
+        return urls
+
+    # Fallback: reuse URLs from any configured iCal widgets.
+    fallback_urls = []
+    for key, settings in config.get("widget_settings", {}).items():
+        if key.split("_")[0] == "ical":
+            fallback_urls.extend(settings.get("urls", []))
+    return fallback_urls
+
+def fetch_ical_events(urls):
+    all_events = []
+    had_errors = False
+    now = datetime.now(pytz.utc)
+
+    for url in urls:
+        if not url or "YOUR_ICAL_URL_HERE" in url:
+            continue
+        try:
+            r = SESSION.get(url, timeout=10)
+            r.raise_for_status()
+            cal = Calendar.from_ical(r.content)
+            for component in cal.walk():
+                if component.name != "VEVENT":
+                    continue
+                dtstart_prop = component.get("dtstart")
+                if not dtstart_prop:
+                    continue
+
+                dtstart_raw = dtstart_prop.dt
+                summary = str(component.get("summary", "(No title)"))
+                location = str(component.get("location", "")).strip()
+
+                if isinstance(dtstart_raw, datetime):
+                    event_dt = dtstart_raw
+                    is_dt = True
+                elif isinstance(dtstart_raw, date):
+                    event_dt = datetime.combine(dtstart_raw, datetime.min.time())
+                    is_dt = False
+                else:
+                    continue
+
+                if event_dt.tzinfo is None:
+                    event_dt = pytz.utc.localize(event_dt)
+                else:
+                    event_dt = event_dt.astimezone(pytz.utc)
+
+                if event_dt >= now:
+                    all_events.append((event_dt, summary, is_dt, location))
+        except Exception as e:
+            print(f"iCal fetch parse error {url}: {e}")
+            had_errors = True
+
+    all_events.sort(key=lambda x: x[0])
+    return all_events, had_errors
 
 def get_nws_forecast_url(location):
     if location in NWS_CACHE and (time.time() - NWS_CACHE[location]["time"]) < 3600:
@@ -210,6 +271,9 @@ class BaseWidget:
             "system": {"scale": 0.8, "thick": 1},
             "ip": {"scale": 0.8, "thick": 1},
             "moon": {"scale": 0.9, "thick": 1},
+            "commute": {"scale": 0.9, "thick": 1},
+            "dailyagenda": {"scale": 0.9, "thick": 1},
+            "photomemories": {"scale": 0.9, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -354,7 +418,7 @@ class ICalWidget(BaseWidget):
     def _update_text_worker(self, app):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-            ical_urls = widget_settings.get("urls", [])
+            ical_urls = collect_ical_urls(self.config, self.widget_name)
             display_tz_str = widget_settings.get("timezone", "UTC")
             try:
                 display_tz = pytz.timezone(display_tz_str)
@@ -365,54 +429,14 @@ class ICalWidget(BaseWidget):
                 self.set_error("no urls", app, "Set iCal URLs in widget settings")
                 return
 
-            all_events = []
-            now = datetime.now(pytz.utc)
-            had_errors = False
-
-            for url in ical_urls:
-                if not url or "YOUR_ICAL_URL_HERE" in url:
-                    continue
-                try:
-                    r = SESSION.get(url, timeout=10)
-                    r.raise_for_status()
-                    cal = Calendar.from_ical(r.content)
-                    for component in cal.walk():
-                        if component.name != "VEVENT":
-                            continue
-                        dtstart_prop = component.get("dtstart")
-                        if not dtstart_prop:
-                            continue
-                        dtstart_raw = dtstart_prop.dt
-                        summary = component.get("summary")
-
-                        if isinstance(dtstart_raw, datetime):
-                            event_dt = dtstart_raw
-                            is_dt = True
-                        elif isinstance(dtstart_raw, date):
-                            event_dt = datetime.combine(dtstart_raw, datetime.min.time())
-                            is_dt = False
-                        else:
-                            continue
-
-                        if event_dt.tzinfo is None:
-                            event_dt = pytz.utc.localize(event_dt)
-                        else:
-                            event_dt = event_dt.astimezone(pytz.utc)
-
-                        if event_dt >= now:
-                            all_events.append((event_dt, summary, is_dt))
-                except Exception as e:
-                    print(f"iCal fetch parse error {url}: {e}")
-                    had_errors = True
-
-            all_events.sort(key=lambda x: x[0])
+            all_events, had_errors = fetch_ical_events(ical_urls)
 
             if not all_events and had_errors:
                 self.set_error("fetch", app, "iCal  Error")
                 return
 
             lines = []
-            for event_time, summary, is_dt in all_events[:5]:
+            for event_time, summary, is_dt, _location in all_events[:5]:
                 if is_dt:
                     local = event_time.astimezone(display_tz)
                     lines.append(f"{local.strftime('%a %m/%d %I:%M %p')}: {summary}")
@@ -432,6 +456,277 @@ class ICalWidget(BaseWidget):
         thread.daemon = True
         thread.start()
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class CommuteWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            ical_urls = collect_ical_urls(self.config, self.widget_name)
+            display_tz_str = widget_settings.get("timezone", "UTC")
+            commute_minutes = int(widget_settings.get("commute_minutes", 25))
+            prep_minutes = int(widget_settings.get("prep_minutes", 10))
+            lookahead_hours = int(widget_settings.get("lookahead_hours", 24))
+
+            try:
+                display_tz = pytz.timezone(display_tz_str)
+            except pytz.exceptions.UnknownTimeZoneError:
+                display_tz = pytz.utc
+                self.set_error("unknown timezone", app, f"Unknown Zone:\n{display_tz_str}")
+                return
+
+            if not ical_urls:
+                self.set_error("no urls", app, "Set iCal URLs in widget settings")
+                return
+
+            all_events, had_errors = fetch_ical_events(ical_urls)
+            now_utc = datetime.now(pytz.utc)
+            cutoff = now_utc + timedelta(hours=lookahead_hours)
+
+            commute_event = None
+            for event_time, summary, is_dt, location in all_events:
+                if not is_dt:
+                    continue
+                if not location:
+                    continue
+                if event_time > cutoff:
+                    continue
+                commute_event = (event_time, summary, location)
+                break
+
+            if not commute_event and had_errors:
+                self.set_error("fetch", app, "Commute  Error")
+                return
+            if not commute_event:
+                self.set_text("Commute\nNo upcoming events with a location.", app)
+                return
+
+            event_utc, summary, location = commute_event
+            now_local = now_utc.astimezone(display_tz)
+            start_local = event_utc.astimezone(display_tz)
+            leave_local = start_local - timedelta(minutes=(commute_minutes + prep_minutes))
+
+            delta_minutes = int((leave_local - now_local).total_seconds() / 60)
+            if delta_minutes > 0:
+                leave_status = f"Leave in {delta_minutes} min"
+            elif delta_minutes >= -5:
+                leave_status = "Leave now"
+            else:
+                leave_status = f"Running late by {abs(delta_minutes)} min"
+
+            text = (
+                "Commute\n"
+                f"{leave_status}\n"
+                f"{summary}\n"
+                f"{start_local.strftime('%a %I:%M %p')} @ {location}\n"
+                f"ETA {commute_minutes}m + prep {prep_minutes}m"
+            )
+            self.mark_updated()
+            self.set_text(text, app)
+        except Exception as e:
+            print(f"Commute widget update error: {e}")
+            self.set_error("error", app, "Commute  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        # Keep this fresher than normal feeds so leave-time countdown feels live.
+        self.update_timer = app.after(60000, lambda: self.update(app))
+
+class DailyAgendaWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            ical_urls = collect_ical_urls(self.config, self.widget_name)
+            display_tz_str = widget_settings.get("timezone", "UTC")
+            max_events = int(widget_settings.get("max_events", 6))
+            days_ahead = int(widget_settings.get("days_ahead", 3))
+
+            try:
+                display_tz = pytz.timezone(display_tz_str)
+            except pytz.exceptions.UnknownTimeZoneError:
+                display_tz = pytz.utc
+                self.set_error("unknown timezone", app, f"Unknown Zone:\n{display_tz_str}")
+                return
+
+            if not ical_urls:
+                self.set_error("no urls", app, "Set iCal URLs in widget settings")
+                return
+
+            all_events, had_errors = fetch_ical_events(ical_urls)
+            now = datetime.now(pytz.utc)
+            cutoff = now + timedelta(days=days_ahead)
+            items = []
+
+            for event_time, summary, is_dt, location in all_events:
+                if event_time > cutoff:
+                    continue
+                local = event_time.astimezone(display_tz)
+                if is_dt:
+                    line = f"{local.strftime('%a %m/%d %I:%M %p')}  {summary}"
+                else:
+                    line = f"{local.strftime('%a %m/%d')}  {summary}"
+                if location:
+                    line += f" @ {location}"
+                items.append(line)
+                if len(items) >= max_events:
+                    break
+
+            if not items and had_errors:
+                self.set_error("fetch", app, "Agenda  Error")
+                return
+
+            header = "Daily Agenda"
+            body = "\n".join(items) if items else "No events scheduled."
+            self.mark_updated()
+            self.set_text(f"{header}\n{body}", app)
+        except Exception as e:
+            print(f"Daily agenda update error: {e}")
+            self.set_error("error", app, "Agenda  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class PhotoMemoriesWidget(BaseWidget):
+    def __init__(self, config, widget_name):
+        super().__init__(config, widget_name)
+        self.current_photo_path = ""
+        self.current_caption = ""
+
+    @staticmethod
+    def _parse_date_from_filename(filename):
+        # Supports names containing YYYY-MM-DD, YYYY_MM_DD, or YYYYMMDD.
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        normalized = stem.replace("_", "-").replace(".", "-")
+        tokens = normalized.split("-")
+
+        for i in range(len(tokens) - 2):
+            y, m, d = tokens[i:i+3]
+            if len(y) == 4 and len(m) in (1, 2) and len(d) in (1, 2):
+                if y.isdigit() and m.isdigit() and d.isdigit():
+                    try:
+                        return date(int(y), int(m), int(d))
+                    except ValueError:
+                        pass
+
+        digits = "".join(ch for ch in stem if ch.isdigit())
+        if len(digits) >= 8:
+            for i in range(len(digits) - 7):
+                chunk = digits[i:i+8]
+                y = int(chunk[0:4]); m = int(chunk[4:6]); d = int(chunk[6:8])
+                try:
+                    return date(y, m, d)
+                except ValueError:
+                    continue
+        return None
+
+    def _update_text(self):
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        source_mode = widget_settings.get("source_mode", "folder")
+        single_file = widget_settings.get("single_file", "")
+        folder = widget_settings.get("folder", "")
+        max_name_chars = int(widget_settings.get("max_name_chars", 45))
+        self.current_photo_path = ""
+        self.current_caption = ""
+
+        if source_mode == "single":
+            if not single_file:
+                self.text = "Photo Memories\nSet single photo in widget settings"
+                return
+            if not os.path.isfile(single_file):
+                self.text = "Photo Memories\nSelected photo not found"
+                return
+            filename = os.path.basename(single_file)
+            if len(filename) > max_name_chars:
+                filename = filename[:max_name_chars - 3] + "..."
+            self.mark_updated()
+            self.current_photo_path = single_file
+            self.current_caption = f"Photo - {filename}"
+            self.text = f"Photo\n{filename}"
+            return
+
+        if not folder:
+            self.text = "Photo Memories\nSet folder in widget settings"
+            return
+        if not os.path.isdir(folder):
+            self.text = "Photo Memories\nFolder not found"
+            return
+
+        files = []
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext in PHOTO_EXTENSIONS:
+                files.append(path)
+
+        if not files:
+            self.text = "Photo Memories\nNo photos found"
+            return
+
+        today = date.today()
+        today_matches = []
+        fallback = []
+        for path in files:
+            parsed = self._parse_date_from_filename(path)
+            if parsed:
+                if parsed.month == today.month and parsed.day == today.day:
+                    today_matches.append((path, parsed))
+                else:
+                    fallback.append((path, parsed))
+            else:
+                fallback.append((path, None))
+
+        chosen_path, parsed_date = random.choice(today_matches if today_matches else fallback)
+        filename = os.path.basename(chosen_path)
+        if len(filename) > max_name_chars:
+            filename = filename[:max_name_chars - 3] + "..."
+
+        if parsed_date:
+            years = max(0, today.year - parsed_date.year)
+            age_line = f"{years} year(s) ago" if years else "From this year"
+        else:
+            age_line = "Favorite memory"
+
+        prefix = "On This Day" if today_matches else "Memory"
+        self.mark_updated()
+        self.current_photo_path = chosen_path
+        self.current_caption = f"{prefix} - {filename} - {age_line}"
+        self.text = f"{prefix}\n{filename}\n{age_line}"
+
+    def draw(self, painter, app):
+        if self.current_photo_path:
+            win_width = app.central_widget.width()
+            win_height = app.central_widget.height()
+            x, y, anchor = self.get_position(win_width, win_height)
+            app.draw_photo_widget(
+                painter,
+                self.widget_name,
+                self.current_photo_path,
+                (x, y),
+                anchor
+            )
+            return
+        super().draw(painter, app)
+
+    def update(self, app):
+        self._update_text()
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        source_mode = widget_settings.get("source_mode", "folder")
+        if source_mode == "single":
+            refresh_ms = 3600000
+        else:
+            try:
+                refresh_minutes = int(widget_settings.get("refresh_minutes", 60))
+            except (TypeError, ValueError):
+                refresh_minutes = 60
+            refresh_minutes = max(1, min(1440, refresh_minutes))
+            refresh_ms = refresh_minutes * 60000
+        self.update_timer = app.after(refresh_ms, lambda: self.update(app))
 
 class RssWidget(BaseWidget):
     def _update_text_worker(self, app):
@@ -897,6 +1192,9 @@ WIDGET_CLASSES = {
     "system": SystemStatsWidget,
     "ip": IPWidget,
     "moon": MoonWidget,
+    "commute": CommuteWidget,
+    "dailyagenda": DailyAgendaWidget,
+    "photomemories": PhotoMemoriesWidget,
 }
 
 class WidgetManager:

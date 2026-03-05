@@ -446,6 +446,16 @@ class SettingsDialog(QDialog):
         # Default settings
         defaults = {
             "ical": {"urls": [], "timezone": "US/Central"},
+            "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
+            "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
+            "photomemories": {
+                "source_mode": "folder",
+                "single_file": "",
+                "folder": "",
+                "refresh_minutes": 60,
+                "max_name_chars": 45,
+                "image_scale": 0.35
+            },
             "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5},
             "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
             "worldclock": {"timezone": "UTC"},
@@ -528,6 +538,25 @@ class SettingsDialog(QDialog):
             list_widget.addItem(f"{l}: {t}")
             league_input.clear()
             teams_input.clear()
+            self.save_current_widget_ui_to_config()
+
+    def select_folder_for_entry(self, entry_widget):
+        start_dir = entry_widget.text() if entry_widget.text() and os.path.isdir(entry_widget.text()) else ""
+        folder = QFileDialog.getExistingDirectory(self, "Select Photo Folder", start_dir)
+        if folder:
+            entry_widget.setText(folder)
+            self.save_current_widget_ui_to_config()
+
+    def select_image_for_entry(self, entry_widget):
+        start_path = entry_widget.text() if entry_widget.text() else ""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Photo",
+            start_path,
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif)"
+        )
+        if file_path:
+            entry_widget.setText(file_path)
             self.save_current_widget_ui_to_config()
 
     def display_widget_settings(self, item):
@@ -633,6 +662,75 @@ class SettingsDialog(QDialog):
             btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
             self.widget_settings_layout.addLayout(btn_layout)
 
+        elif widget_type == "commute":
+            combo = QComboBox(); combo.setObjectName("tz_combo")
+            combo.addItems(pytz.all_timezones)
+            combo.setCurrentText(settings.get("timezone", "US/Central"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Timezone:", combo)
+
+            list_widget = QListWidget(); list_widget.setObjectName("url_list")
+            for url in settings.get("urls", []):
+                item = QListWidgetItem(url)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                list_widget.addItem(item)
+            list_widget.itemChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("iCal URLs (optional):", list_widget)
+
+            btn_layout = QHBoxLayout()
+            add_btn = QPushButton("+"); add_btn.clicked.connect(lambda: self.add_list_item(list_widget))
+            rem_btn = QPushButton("-"); rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
+            btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
+            self.widget_settings_layout.addLayout(btn_layout)
+
+            entry = QLineEdit(); entry.setObjectName("commute_minutes_entry")
+            entry.setText(str(settings.get("commute_minutes", 25)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Commute Minutes:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("prep_minutes_entry")
+            entry.setText(str(settings.get("prep_minutes", 10)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Prep Minutes:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("lookahead_hours_entry")
+            entry.setText(str(settings.get("lookahead_hours", 24)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Lookahead Hours:", entry)
+
+        elif widget_type == "dailyagenda":
+            combo = QComboBox(); combo.setObjectName("tz_combo")
+            combo.addItems(pytz.all_timezones)
+            combo.setCurrentText(settings.get("timezone", "US/Central"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Timezone:", combo)
+
+            list_widget = QListWidget(); list_widget.setObjectName("url_list")
+            for url in settings.get("urls", []):
+                item = QListWidgetItem(url)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                list_widget.addItem(item)
+            list_widget.itemChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("iCal URLs (optional):", list_widget)
+
+            btn_layout = QHBoxLayout()
+            add_btn = QPushButton("+"); add_btn.clicked.connect(lambda: self.add_list_item(list_widget))
+            rem_btn = QPushButton("-"); rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
+            btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
+            self.widget_settings_layout.addLayout(btn_layout)
+
+            combo = QComboBox(); combo.setObjectName("max_events_combo")
+            combo.addItems([str(i) for i in range(1, 21)])
+            combo.setCurrentText(str(settings.get("max_events", 6)))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Max Events:", combo)
+
+            combo = QComboBox(); combo.setObjectName("days_ahead_combo")
+            combo.addItems([str(i) for i in range(1, 15)])
+            combo.setCurrentText(str(settings.get("days_ahead", 3)))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Days Ahead:", combo)
+
         elif widget_type == "rss":
             entry = QLineEdit(); entry.setObjectName("title_entry")
             entry.setText(settings.get("title", ""))
@@ -737,6 +835,56 @@ class SettingsDialog(QDialog):
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Max Width (chars):", entry)
 
+        elif widget_type == "photomemories":
+            combo = QComboBox(); combo.setObjectName("photo_source_combo")
+            combo.addItems(["Folder (Rotate)", "Single Photo"])
+            source_mode = settings.get("source_mode", "folder")
+            combo.setCurrentText("Single Photo" if source_mode == "single" else "Folder (Rotate)")
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Source:", combo)
+
+            file_row = QHBoxLayout()
+            file_entry = QLineEdit(); file_entry.setObjectName("photo_file_entry")
+            file_entry.setText(settings.get("single_file", ""))
+            file_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            file_row.addWidget(file_entry)
+            file_browse_btn = QPushButton("Browse...")
+            file_browse_btn.clicked.connect(lambda _=False, e=file_entry: self.select_image_for_entry(e))
+            file_row.addWidget(file_browse_btn)
+            file_widget = QWidget()
+            file_widget.setLayout(file_row)
+            add_row("Single Photo:", file_widget)
+
+            folder_row = QHBoxLayout()
+            entry = QLineEdit(); entry.setObjectName("photo_folder_entry")
+            entry.setText(settings.get("folder", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            folder_row.addWidget(entry)
+            browse_btn = QPushButton("Browse...")
+            browse_btn.clicked.connect(lambda _=False, e=entry: self.select_folder_for_entry(e))
+            folder_row.addWidget(browse_btn)
+            folder_widget = QWidget()
+            folder_widget.setLayout(folder_row)
+            add_row("Photo Folder:", folder_widget)
+
+            refresh_combo = QComboBox(); refresh_combo.setObjectName("photo_refresh_combo")
+            refresh_combo.addItems([str(i) for i in [1, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440]])
+            refresh_combo.setEditable(True)
+            refresh_combo.setCurrentText(str(settings.get("refresh_minutes", 60)))
+            refresh_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Folder Refresh (min):", refresh_combo)
+
+            entry = QLineEdit(); entry.setObjectName("photo_name_chars_entry")
+            entry.setText(str(settings.get("max_name_chars", 45)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Max Filename Chars:", entry)
+
+            scale_slider = QSlider(Qt.Orientation.Horizontal); scale_slider.setObjectName("photo_scale_slider")
+            scale_slider.setRange(10, 100)
+            scale_slider.setValue(int(settings.get("image_scale", 0.35) * 100))
+            scale_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Image Scale (% width):", scale_slider)
+
     def save_current_widget_ui_to_config(self, *args): # Modified to accept *args
         widget_name = self.widget_settings_area.property("current_widget")
         if not widget_name:
@@ -777,6 +925,38 @@ class SettingsDialog(QDialog):
             list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
             if list_widget:
                 settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+        elif widget_type == "commute":
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            entry = self.widget_settings_area.findChild(QLineEdit, "commute_minutes_entry")
+            if entry:
+                try: settings["commute_minutes"] = int(entry.text())
+                except ValueError: pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "prep_minutes_entry")
+            if entry:
+                try: settings["prep_minutes"] = int(entry.text())
+                except ValueError: pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "lookahead_hours_entry")
+            if entry:
+                try: settings["lookahead_hours"] = int(entry.text())
+                except ValueError: pass
+        elif widget_type == "dailyagenda":
+            combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
+            if combo: settings["timezone"] = combo.currentText()
+            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
+            if list_widget:
+                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            combo = self.widget_settings_area.findChild(QComboBox, "max_events_combo")
+            if combo:
+                try: settings["max_events"] = int(combo.currentText())
+                except ValueError: pass
+            combo = self.widget_settings_area.findChild(QComboBox, "days_ahead_combo")
+            if combo:
+                try: settings["days_ahead"] = int(combo.currentText())
+                except ValueError: pass
         elif widget_type == "rss":
             entry = self.widget_settings_area.findChild(QLineEdit, "title_entry")
             if entry: settings["title"] = entry.text()
@@ -825,6 +1005,35 @@ class SettingsDialog(QDialog):
             if entry:
                 try: settings["max_width_chars"] = int(entry.text())
                 except ValueError: pass
+        elif widget_type == "photomemories":
+            combo = self.widget_settings_area.findChild(QComboBox, "photo_source_combo")
+            if combo:
+                settings["source_mode"] = "single" if combo.currentText() == "Single Photo" else "folder"
+            entry = self.widget_settings_area.findChild(QLineEdit, "photo_file_entry")
+            if entry:
+                settings["single_file"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "photo_folder_entry")
+            if entry: settings["folder"] = entry.text()
+            combo = self.widget_settings_area.findChild(QComboBox, "photo_refresh_combo")
+            if combo:
+                try:
+                    settings["refresh_minutes"] = int(combo.currentText())
+                except ValueError:
+                    pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "photo_name_chars_entry")
+            if entry:
+                try: settings["max_name_chars"] = int(entry.text())
+                except ValueError: pass
+            slider = self.widget_settings_area.findChild(QSlider, "photo_scale_slider")
+            if slider:
+                settings["image_scale"] = slider.value() / 100.0
+            # Apply photo setting changes immediately without waiting for the next timer tick.
+            widget = self.parent.widget_manager.widgets.get(widget_name)
+            if widget and hasattr(widget, "_update_text"):
+                try:
+                    widget._update_text()
+                except Exception as e:
+                    print(f"Photo widget immediate update error: {e}")
         
         self.parent.central_widget.update()
 
@@ -1180,6 +1389,40 @@ class MagicMirrorApp(QMainWindow):
         widget = self.widget_manager.widgets.get(widget_name)
         if not widget:
             return None
+        widget_type = widget_name.split("_")[0]
+
+        if widget_type == "photomemories":
+            settings = self.config.get("widget_settings", {}).get(widget_name, {})
+            try:
+                scale = float(settings.get("image_scale", 0.35))
+            except (TypeError, ValueError):
+                scale = 0.35
+            scale = max(0.1, min(1.0, scale))
+
+            base_width = max(120, int(self.central_widget.width() * scale))
+            path = getattr(widget, "current_photo_path", "")
+            pixmap = QPixmap(path) if path and os.path.exists(path) else QPixmap()
+
+            if not pixmap.isNull() and pixmap.width() > 0:
+                text_width = base_width
+                text_height = int(base_width * pixmap.height() / pixmap.width())
+            else:
+                text_width = base_width
+                text_height = int(base_width * 0.6)
+
+            max_h = int(self.central_widget.height() * 0.8)
+            if text_height > max_h:
+                ratio = max_h / max(1, text_height)
+                text_height = max_h
+                text_width = int(text_width * ratio)
+
+            pos = self.config["widget_positions"][widget_name]
+            anchor_x = int(pos["x"] * self.central_widget.width())
+            anchor_y = int(pos["y"] * self.central_widget.height())
+            anchor = pos.get("anchor", "nw")
+            x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), text_width, text_height)
+            return QRect(int(x0), int(y0), int(text_width) + 2, int(text_height) + 2)
+
         scale_multiplier = self.config.get("text_scale_multiplier", 1.0)
         # Apply per-widget font scale
         widget_settings = self.config.get("widget_settings", {}).get(widget_name, {})
@@ -1310,6 +1553,36 @@ class MagicMirrorApp(QMainWindow):
                 c_text = self.config.get("text_color", [255, 255, 255])
                 painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
                 painter.drawText(QPoint(int(line_x), int(baseline_y)), line)
+
+    def draw_photo_widget(self, painter, widget_name, photo_path, pos, anchor):
+        if not photo_path or not os.path.exists(photo_path):
+            self.draw_text(painter, "Photo unavailable", pos, 0.9, anchor=anchor, widget_name=widget_name)
+            return
+
+        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        try:
+            scale = float(settings.get("image_scale", 0.35))
+        except (TypeError, ValueError):
+            scale = 0.35
+        scale = max(0.1, min(1.0, scale))
+
+        pixmap = QPixmap(photo_path)
+        if pixmap.isNull() or pixmap.width() <= 0:
+            self.draw_text(painter, "Photo unavailable", pos, 0.9, anchor=anchor, widget_name=widget_name)
+            return
+
+        target_w = max(120, int(self.central_widget.width() * scale))
+        target_h = int(target_w * pixmap.height() / pixmap.width())
+        max_h = int(self.central_widget.height() * 0.8)
+        if target_h > max_h:
+            ratio = max_h / max(1, target_h)
+            target_h = max_h
+            target_w = int(target_w * ratio)
+
+        x, y = self._get_top_left_for_anchor(anchor, pos, target_w, target_h)
+        rect = QRect(int(x), int(y), int(target_w), int(target_h))
+        scaled = pixmap.scaled(target_w, target_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        painter.drawPixmap(rect, scaled)
 
     def central_widget_mouse_press(self, event):
         if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
