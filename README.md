@@ -1,62 +1,119 @@
 # Magic Mirror
 
-A customizable, modular smart mirror application built with Python and PySide6. This application uses a webcam feed as a dynamic background and overlays a variety of customizable widgets to create a personalized smart mirror experience.
-<br/>
-<img src="https://github.com/nicarley/pymagicmirror/blob/master/resources/screenshot.png" width="320px" />
+A modular smart mirror dashboard built with Python + PySide6. It renders a configurable background (camera, image, video, YouTube, or solid color) and overlays draggable widgets for daily information.
 
-## Key Features
+## What It Can Do
 
-*   **Live Video Background:** Uses any connected webcam to create a real-time mirror effect.
-*   **Rich Widget Library:** Includes a variety of built-in widgets to display useful information at a glance:
-    *   **Time:** A digital clock with 12-hour and 24-hour format options.
-    *   **Date:** Displays the current day, date, and year.
-    *   **Weather & Forecast:** Shows the current weather and a 5-day forecast for any location (powered by the National Weather Service).
-    *   **Calendar:** A simple monthly calendar.
-    *   **iCal Feed Aggregator:** Aggregates multiple iCal feeds into a single, unified list of upcoming events.
-    *   **RSS Feed Aggregator:** Displays the latest headlines from your favorite RSS feeds.
-    *   **Sports:** Live scores and game updates for major leagues (NFL, NBA, MLB, NHL, NCAAF, NCAAMB).
-    *   **Stock:** Real-time stock prices and changes for your favorite symbols.
-    *          * https://site.financialmodelingprep.com/developer/docs/pricing Must have an API Key from here
-    *   **History:** "On This Day" historical events.
-    *   **Countdown:** A countdown timer to a specific date and time.
-    *   **Quotes:** Displays random inspirational quotes.
-    *   **System Stats:** Shows CPU and RAM usage.
-    *   **IP Address:** Displays the machine's local IP address for easy remote management access.
-*   **Web Management Interface:** A built-in web server (port 815) allows you to configure the mirror from any device on your network.
-    *   **Live Preview:** View a real-time screenshot of the mirror.
-    *   **Remote Layout Editing:** Drag and drop widgets directly in the web browser.
-    *   **Full Configuration:** Add, remove, and configure all widgets and general settings remotely.
-*   **Drag-and-Drop Interface:** An intuitive edit mode allows you to easily reposition widgets by simply dragging and dropping them directly on the mirror.
-*   **Real-Time Settings Panel:** A comprehensive settings panel allows you to customize the application in real-time, with no need to restart:
-    *   **Webcam Selection:** Automatically detects and allows you to switch between multiple connected cameras.
-    *   **Fullscreen Control:** Easily toggle between fullscreen and windowed mode.
-    *   **Text Customization:** Adjust global text size, font family, color, and shadow.
-    *   **Refresh Interval:** Customize how often data feeds are updated.
-    *   **Background Opacity:** Dim the video background for better text readability.
-*   **Persistent Configuration:** All your settings and widget layouts are automatically saved to a `config.json` file, so your setup is always just the way you left it.
+- Multiple background modes:
+  - `None` (solid color)
+  - `Camera` (supports multiple camera indices)
+  - `Image`
+  - `Video`
+  - `YouTube URL`
+- Background controls:
+  - mirror mode
+  - 0° / 90° / 180° / 270° rotation
+  - dimming overlay
+  - custom background color
+- Widget layout editing:
+  - drag-and-drop placement in edit mode
+  - per-widget anchor positioning
+  - per-widget scale controls
+- Desktop settings panel:
+  - real-time updates
+  - add/remove/rename widgets
+  - font, color, refresh, fullscreen controls
+- Web management UI (`:815`):
+  - live preview
+  - remote widget movement
+  - remote settings and widget config
+- Persistent configuration in `config.json`
 
-## Getting Started
+## Included Widgets
 
-### Prerequisites
+- `time`
+- `date`
+- `worldclock`
+- `calendar`
+- `ical`
+- `dailyagenda` (calendar-based)
+- `commute` (calendar-based leave-time helper)
+- `weatherforecast`
+- `rss`
+- `sports`
+- `stock`
+- `history`
+- `countdown`
+- `quotes`
+- `system`
+- `ip`
+- `moon`
+- `photomemories`
+  - single-photo mode
+  - folder rotation mode with interval
+  - image scaling + folder/file picker in settings
 
-*   Python 3.x
-*   A connected webcam
+## Requirements
 
-## How to Use
+- Python 3.10+
+- A webcam is optional (only needed for camera mode)
 
-*   **Open Settings:** Click the gear icon (⚙️) in the top right corner to open the settings panel.
-*   **Edit Layout:** Press the 'E' key or click the 'E' button to enter edit mode. You can then click and drag any widget to a new position. Press 'E' again to save the layout.
-*   **Web Interface:** Open a web browser and navigate to `http://localhost:815` (or the machine's IP address) to access the remote management panel.
-*   **Toggle Fullscreen:** Press `F11` to enter or exit fullscreen mode. `Escape` will also exit fullscreen.
+## Install
+
+1. Create and activate a virtual environment.
+2. Install dependencies:
+
+```bash
+pip install PySide6 opencv-python requests feedparser icalendar pytz certifi
+```
+
+Optional:
+
+```bash
+pip install yt-dlp psutil
+```
+
+Notes:
+
+- `yt-dlp` is needed for YouTube background mode.
+- `psutil` is needed for the `system` widget.
+- Stock widget requires an API key from Financial Modeling Prep.
+
+## Run
+
+```bash
+python main.py
+```
+
+If your environment uses `Main.py`, run:
+
+```bash
+python Main.py
+```
+
+## Basic Usage
+
+- Open settings: click the gear icon.
+- Enter edit mode: press `E` or click the `E` button.
+- Toggle fullscreen: `F11`.
+- Exit fullscreen: `Esc`.
+- Open web manager: `http://localhost:815`.
 
 ## Configuration
 
-The application automatically creates and manages a `config.json` file in the root directory. While most settings can be configured through the UI or Web Interface, you can also manually edit this file for advanced customization.
+The app reads/writes `config.json` in the project root.
 
-## Contributing
+You can configure most options from the desktop or web UI, including:
 
-Contributions are welcome! If you have an idea for a new feature or have found a bug, please open an issue or submit a pull request.
+- background mode and source
+- widget list and positions
+- widget-specific settings
+- global appearance
+
+## Security Note
+
+The built-in web manager is intended for trusted/local networks. If you expose it beyond your LAN, add proper network protections.
 
 ## License
 
-This project is licensed under the MIT License - see the `LICENSE.md` file for details.
+MIT (see `LICENSE.md` if present in your repo).
