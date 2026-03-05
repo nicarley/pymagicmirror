@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import tempfile
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QFileDialog
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
-from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker
+from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal
 import cv2
 import pytz
 import certifi
@@ -34,8 +35,10 @@ class VideoLabel(QLabel):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        bg = self.main_app.config.get("background_color", [0, 0, 0])
+        background_color = QColor(bg[0], bg[1], bg[2])
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
-            painter.fillRect(self.rect(), Qt.GlobalColor.black)
+            painter.fillRect(self.rect(), background_color)
         else:
             scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
             painter.drawPixmap(self.rect(), scaled)
@@ -199,6 +202,10 @@ class SettingsDialog(QDialog):
         self.shadow_color_button = QPushButton("Shadow Color")
         self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
         colors_layout.addWidget(self.shadow_color_button)
+
+        self.background_color_button = QPushButton("Background Color")
+        self.background_color_button.clicked.connect(self.open_background_color_picker)
+        colors_layout.addWidget(self.background_color_button)
         app_layout.addRow("Colors:", colors_layout)
 
         layout.addWidget(app_group)
@@ -242,6 +249,14 @@ class SettingsDialog(QDialog):
         color = QColorDialog.getColor(current_color, self)
         if color.isValid():
             self.config["text_shadow_color"] = [color.red(), color.green(), color.blue()]
+            self.parent.central_widget.update()
+
+    def open_background_color_picker(self):
+        c = self.config.get("background_color", [0, 0, 0])
+        current_color = QColor(c[0], c[1], c[2])
+        color = QColorDialog.getColor(current_color, self)
+        if color.isValid():
+            self.config["background_color"] = [color.red(), color.green(), color.blue()]
             self.parent.central_widget.update()
 
     def live_update_camera(self, index):
@@ -843,6 +858,8 @@ class SettingsDialog(QDialog):
                 self.clear_layout(child.layout())
 
 class MagicMirrorApp(QMainWindow):
+    remote_config_update_requested = Signal()
+
     def __init__(self):
         super().__init__()
         self.edit_mode = False
@@ -852,6 +869,7 @@ class MagicMirrorApp(QMainWindow):
         self.web_server = None
         self.preview_image_data = None
         self.preview_image_mutex = QMutex()
+        self.remote_config_update_requested.connect(self.apply_remote_config, Qt.ConnectionType.QueuedConnection)
         self.load_config()
 
         self.setWindowTitle("Magic Mirror")
@@ -916,6 +934,7 @@ class MagicMirrorApp(QMainWindow):
             "widget_settings": {},
             "text_color": [255, 255, 255],
             "text_shadow_color": [0, 0, 0],
+            "background_color": [0, 0, 0],
             "FMP_API_KEY": "YOUR_FMP_API_KEY",
             "font_family": "Helvetica",
             "background_opacity": 0.0,
@@ -936,14 +955,36 @@ class MagicMirrorApp(QMainWindow):
 
     def save_config(self):
         with QMutexLocker(self.config_mutex):
+            tmp_path = None
             try:
-                with open(CONFIG_FILE, "w") as f:
-                    json.dump(self.config, f, indent=4)
+                config_dir = os.path.dirname(os.path.abspath(CONFIG_FILE)) or "."
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=config_dir,
+                    prefix="config.",
+                    suffix=".tmp",
+                    delete=False
+                ) as tmp:
+                    tmp_path = tmp.name
+                    json.dump(self.config, tmp, indent=4)
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                os.replace(tmp_path, CONFIG_FILE)
             except IOError as e:
                 print(f"Error saving config: {e}")
+            except OSError as e:
+                print(f"Error saving config: {e}")
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
 
     def setup_camera(self):
         mode = self.config.get("background_mode", "Camera")
+        had_error = False
         
         if hasattr(self, "cap") and self.cap and self.cap.isOpened():
             self.cap.release()
@@ -955,6 +996,7 @@ class MagicMirrorApp(QMainWindow):
             # Stop timer? Or keep it for widgets?
             # The timer calls update_camera_feed which calls central_widget.update() if no camera.
             # So widgets are drawn.
+            self.clear_error_message()
             return
 
         if mode == "Camera":
@@ -962,6 +1004,7 @@ class MagicMirrorApp(QMainWindow):
             self.cap = cv2.VideoCapture(index)
             if not self.cap.isOpened():
                 self.show_error(f"Could not open Camera {index}")
+                had_error = True
         
         elif mode == "Video":
             path = self.config.get("background_file", "")
@@ -969,8 +1012,10 @@ class MagicMirrorApp(QMainWindow):
                 self.cap = cv2.VideoCapture(path)
                 if not self.cap.isOpened():
                     self.show_error(f"Could not open video: {path}")
+                    had_error = True
             else:
                 self.show_error(f"Video file not found: {path}")
+                had_error = True
 
         elif mode == "Image":
             path = self.config.get("background_file", "")
@@ -978,8 +1023,10 @@ class MagicMirrorApp(QMainWindow):
                 self.static_image = cv2.imread(path)
                 if self.static_image is None:
                     self.show_error(f"Could not load image: {path}")
+                    had_error = True
             else:
                 self.show_error(f"Image file not found: {path}")
+                had_error = True
         
         elif mode == "YouTube":
             url = self.config.get("background_file", "")
@@ -993,12 +1040,16 @@ class MagicMirrorApp(QMainWindow):
                         self.cap = cv2.VideoCapture(video_url)
                         if not self.cap.isOpened():
                             self.show_error(f"Could not open YouTube stream")
+                            had_error = True
                 except ImportError:
                     self.show_error("yt_dlp not installed. Run: pip install yt_dlp")
+                    had_error = True
                 except Exception as e:
                     self.show_error(f"YouTube Error: {e}")
+                    had_error = True
             else:
                 self.show_error("No YouTube URL provided")
+                had_error = True
 
         # Ensure timer is running
         if not hasattr(self, "timer") or not self.timer.isActive():
@@ -1006,7 +1057,8 @@ class MagicMirrorApp(QMainWindow):
             self.timer.timeout.connect(self.update_camera_feed)
             self.timer.start(30)
             
-        self.clear_error_message()
+        if not had_error:
+            self.clear_error_message()
 
     def restart_camera(self):
         self.setup_camera()
@@ -1359,18 +1411,8 @@ class MagicMirrorApp(QMainWindow):
             return self.preview_image_data
 
     def handle_remote_config_update(self):
-        # Called from the web server thread when config is updated
-        # We need to signal the main thread to update UI
-        # Since we are in a different thread, we should use signals/slots or QTimer.singleShot
-        # But for simplicity in this context, we can try to schedule an update.
-        # Note: Direct UI updates from another thread are unsafe in Qt.
-        # We'll use QTimer.singleShot with a lambda that runs in the main thread (if the timer is created in main thread context? No, timer needs to be thread-safe).
-        # Actually, QMetaObject.invokeMethod is the proper way, or signals.
-        # Let's use a simple approach: set a flag or just call update() and hope for the best (risky).
-        # Better: The web server is running in a thread. We should use a signal.
-        # Since I can't easily add a signal to the class definition dynamically without re-instantiating,
-        # I will use QTimer.singleShot(0, self.apply_remote_config) which posts an event to the main loop.
-        QTimer.singleShot(0, self.apply_remote_config)
+        # Called from the web server thread; queued signal marshals work to the UI thread.
+        self.remote_config_update_requested.emit()
 
     def apply_remote_config(self):
         with QMutexLocker(self.config_mutex):
@@ -1394,6 +1436,20 @@ class MagicMirrorApp(QMainWindow):
             self.web_server.shutdown()
             self.web_server = None
             print("Web server stopped.")
+
+    def closeEvent(self, event):
+        self.stop_web_server()
+
+        if hasattr(self, "ticker_timer") and self.ticker_timer.isActive():
+            self.ticker_timer.stop()
+        if hasattr(self, "preview_capture_timer") and self.preview_capture_timer.isActive():
+            self.preview_capture_timer.stop()
+        if hasattr(self, "timer") and self.timer.isActive():
+            self.timer.stop()
+        if hasattr(self, "cap") and self.cap and self.cap.isOpened():
+            self.cap.release()
+
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -364,6 +364,20 @@ HTML_TEMPLATE = """
                 form.appendChild(el);
             };
 
+            const rgbToHex = (rgb) => {
+                if (!Array.isArray(rgb) || rgb.length < 3) return '#000000';
+                const clamp = (n) => Math.max(0, Math.min(255, Number(n) || 0));
+                return '#' + [clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2])]
+                    .map(v => v.toString(16).padStart(2, '0'))
+                    .join('');
+            };
+
+            const hexToRgb = (hex) => {
+                const m = /^#?([a-f0-9]{2})([a-f0-9]{2})([a-f0-9]{2})$/i.exec(hex || '');
+                if (!m) return [0, 0, 0];
+                return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+            };
+
             createSection("General");
             
             const addInput = (label, key, type='text', options=null) => {
@@ -383,7 +397,12 @@ HTML_TEMPLATE = """
                         if (config[key] == opt) o.selected = true;
                         input.appendChild(o);
                     });
-                    input.onchange = (e) => config[key] = e.target.value;
+                    input.onchange = (e) => {
+                        config[key] = e.target.value;
+                        if (key === "background_mode") {
+                            renderForm();
+                        }
+                    };
                 } else if (type === 'checkbox') {
                     input = document.createElement('input');
                     input.type = 'checkbox';
@@ -399,11 +418,35 @@ HTML_TEMPLATE = """
                 form.appendChild(div);
             };
 
+            const addColorInput = (label, key) => {
+                const div = document.createElement('div');
+                div.className = 'form-group';
+                const lbl = document.createElement('label');
+                lbl.innerText = label;
+                div.appendChild(lbl);
+
+                const input = document.createElement('input');
+                input.type = 'color';
+                input.value = rgbToHex(config[key]);
+                input.oninput = (e) => config[key] = hexToRgb(e.target.value);
+
+                div.appendChild(input);
+                form.appendChild(div);
+            };
+
             addInput("Fullscreen", "fullscreen", "checkbox");
             addInput("Mirror Video", "mirror_video", "checkbox");
+            addInput("Background Mode", "background_mode", "select", ["None", "Camera", "Image", "Video", "YouTube"]);
+            if (config.background_mode === "Camera") {
+                addInput("Camera Index", "camera_index", "number");
+            }
+            if (["Image", "Video", "YouTube"].includes(config.background_mode)) {
+                addInput("Background File / URL", "background_file", "text");
+            }
             addInput("Text Scale", "text_scale_multiplier", "number");
             addInput("Background Opacity", "background_opacity", "number");
             addInput("Font Family", "font_family", "select", config.available_fonts || []);
+            addColorInput("Background Color", "background_color");
             
             // Add Widget Section
             const addSection = document.createElement('div');
