@@ -408,7 +408,11 @@ HTML_TEMPLATE = """
                         input.appendChild(o);
                     });
                     input.onchange = (e) => {
-                        config[key] = e.target.value;
+                        if (key === "video_rotation") {
+                            config[key] = parseInt(e.target.value, 10) || 0;
+                        } else {
+                            config[key] = e.target.value;
+                        }
                         if (key === "background_mode") {
                             renderForm();
                         }
@@ -447,6 +451,7 @@ HTML_TEMPLATE = """
             addInput("Fullscreen", "fullscreen", "checkbox");
             addInput("Mirror Video", "mirror_video", "checkbox");
             addInput("Background Mode", "background_mode", "select", ["None", "Camera", "Image", "Video", "YouTube"]);
+            addInput("Background Rotation", "video_rotation", "select", ["0", "1", "2", "3"]);
             if (config.background_mode === "Camera") {
                 addInput("Camera Index", "camera_index", "number");
             }

@@ -163,9 +163,12 @@ class SettingsDialog(QDialog):
         self.fullscreen_check.stateChanged.connect(self.live_update_fullscreen)
         cam_layout.addRow("", self.fullscreen_check)
 
-        self.rotate_button = QPushButton("Rotate Video 90°")
-        self.rotate_button.clicked.connect(lambda: self.parent.rotate_video())
-        cam_layout.addRow("Rotation:", self.rotate_button)
+        self.rotation_combo = QComboBox()
+        self.rotation_combo.addItems(["0°", "90°", "180°", "270°"])
+        current_rot = int(self.config.get("video_rotation", 0)) % 4
+        self.rotation_combo.setCurrentIndex(current_rot)
+        self.rotation_combo.currentIndexChanged.connect(self.live_update_background_rotation)
+        cam_layout.addRow("Background Rotation:", self.rotation_combo)
         
         layout.addWidget(cam_group)
         
@@ -318,6 +321,10 @@ class SettingsDialog(QDialog):
 
     def live_update_mirror_video(self, state):
         self.config["mirror_video"] = self.mirror_video_check.isChecked()
+
+    def live_update_background_rotation(self, index):
+        self.config["video_rotation"] = int(index) % 4
+        self.parent.central_widget.update()
 
     def live_update_fullscreen(self, state):
         is_fullscreen = self.fullscreen_check.isChecked()
