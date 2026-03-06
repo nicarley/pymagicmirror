@@ -789,8 +789,16 @@ class SettingsDialog(QDialog):
         name = self.template_combo.currentText().strip()
         if not name:
             return
+        reply = QMessageBox.question(
+            self,
+            "Remove Template",
+            f"Remove template '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         if not self.parent.remove_saved_template(name):
-            QMessageBox.information(self, "Template", f"Cannot remove built-in template: {name}")
+            QMessageBox.warning(self, "Template", f"Could not remove template: {name}")
             return
         self.refresh_template_choices()
 
@@ -1684,7 +1692,8 @@ class MagicMirrorApp(QMainWindow):
         return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "templates")
 
     def get_available_template_names(self):
-        names = list(self.get_builtin_template_map().keys())
+        disabled = set(self.config.get("disabled_builtin_templates", []))
+        names = [n for n in self.get_builtin_template_map().keys() if n not in disabled]
         try:
             os.makedirs(self._templates_dir(), exist_ok=True)
             for fn in sorted(os.listdir(self._templates_dir())):
@@ -1707,33 +1716,30 @@ class MagicMirrorApp(QMainWindow):
         return safe
 
     def remove_saved_template(self, template_name):
-        # Built-ins are not deletable.
+        # Built-ins are removable from the picker by marking them disabled.
         if template_name in self.get_builtin_template_map():
-            return False
+            disabled = set(self.config.get("disabled_builtin_templates", []))
+            disabled.add(template_name)
+            self.config["disabled_builtin_templates"] = sorted(disabled)
+            self.save_config()
+            return True
         safe = "".join(ch for ch in template_name if ch.isalnum() or ch in (" ", "-", "_")).strip()
         if not safe:
             return False
         path = os.path.join(self._templates_dir(), f"{safe}.json")
         if not os.path.exists(path):
             return False
-        reply = QMessageBox.question(
-            self,
-            "Remove Template",
-            f"Remove template '{template_name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return False
         try:
             os.remove(path)
             return True
-        except Exception as e:
-            QMessageBox.warning(self, "Template Error", f"Could not remove template:\n{e}")
+        except Exception:
             return False
 
     def apply_template(self, template_name):
         # Built-in templates are additive safety presets; custom templates restore exact saved set.
         template_map = self.get_builtin_template_map()
+        if template_name in self.config.get("disabled_builtin_templates", []):
+            return
         if template_name not in template_map:
             path = os.path.join(self._templates_dir(), f"{template_name}.json")
             if os.path.exists(path):
@@ -1841,7 +1847,8 @@ class MagicMirrorApp(QMainWindow):
             "snap_to_grid": True,
             "grid_size": 0.01,
             "onboarding_completed": False,
-            "active_profile_name": "default"
+            "active_profile_name": "default",
+            "disabled_builtin_templates": []
         }
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
