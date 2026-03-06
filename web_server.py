@@ -127,7 +127,7 @@ HTML_TEMPLATE = """
         // Available widget types (hardcoded for now, could be fetched)
         const WIDGET_TYPES = [
             "time", "date", "worldclock", "calendar", "weatherforecast", 
-            "ical", "commute", "dailyagenda", "photomemories", "rss", "sports", "stock", "history", "countdown", 
+            "ical", "commute", "dailyagenda", "photomemories", "flightboard", "energyprice", "package", "sunrisesunset", "astronomy", "rss", "sports", "stock", "history", "countdown", 
             "quotes", "system", "ip", "moon"
         ];
 
@@ -339,6 +339,12 @@ HTML_TEMPLATE = """
                 defaults.max_name_chars = 45;
                 defaults.image_scale = 0.35;
             }
+            else if (type === "flightboard") { defaults.flight_number = ""; defaults.api_key = ""; }
+            else if (type === "energyprice") { defaults.mode = "manual"; defaults.manual_price = 0.12; defaults.currency_symbol = "$"; defaults.unit = "kWh"; defaults.price_url = ""; defaults.json_key = ""; }
+            else if (type === "package") { defaults.company = "ups"; defaults.tracking_number = ""; defaults.api_key = ""; }
+            else if (type === "sunrise") { defaults.lat = 38.624; defaults.lon = -90.184; }
+            else if (type === "sunrisesunset") { defaults.lat = 38.624; defaults.lon = -90.184; }
+            else if (type === "astronomy") { defaults.lat = 38.624; defaults.lon = -90.184; }
             else if (type === "rss") { defaults.urls = []; defaults.style = "Normal"; defaults.title = ""; defaults.article_count = 5; defaults.max_width_chars = 50; }
             else if (type === "weatherforecast") { defaults.location = "Salem, IL"; defaults.style = "Normal"; }
             else if (type === "worldclock") defaults.timezone = "UTC";

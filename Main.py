@@ -2,6 +2,8 @@ import sys
 import json
 import os
 import tempfile
+import time
+from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
@@ -22,6 +24,37 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 CONFIG_FILE = "config.json"
+
+THEME_PRESETS = {
+    "Default": {
+        "background_color": [0, 0, 0],
+        "text_color": [255, 255, 255],
+        "text_shadow_color": [0, 0, 0],
+        "background_opacity": 0.0,
+        "text_scale_multiplier": 1.0,
+    },
+    "Black Background": {
+        "background_color": [0, 0, 0],
+        "text_color": [240, 240, 240],
+        "text_shadow_color": [0, 0, 0],
+        "background_opacity": 0.35,
+        "text_scale_multiplier": 1.0,
+    },
+    "High Contrast": {
+        "background_color": [0, 0, 0],
+        "text_color": [255, 255, 0],
+        "text_shadow_color": [0, 0, 0],
+        "background_opacity": 0.25,
+        "text_scale_multiplier": 1.2,
+    },
+    "Soft Glass": {
+        "background_color": [18, 24, 32],
+        "text_color": [235, 245, 255],
+        "text_shadow_color": [10, 10, 14],
+        "background_opacity": 0.18,
+        "text_scale_multiplier": 1.0,
+    },
+}
 
 class VideoLabel(QLabel):
     def __init__(self, main_app, parent=None):
@@ -63,6 +96,67 @@ class VideoLabel(QLabel):
             for i, line in enumerate(lines):
                 baseline = y + 20 + i * (metrics.height() + 5) + metrics.ascent()
                 painter.drawText(QPoint(x + 10, baseline), line)
+
+class OnboardingDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle("Welcome to Magic Mirror")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Quick setup"))
+
+        form = QFormLayout()
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEME_PRESETS.keys()))
+        form.addRow("Theme:", self.theme_combo)
+
+        self.fullscreen_check = QCheckBox("Start in fullscreen")
+        self.fullscreen_check.setChecked(True)
+        form.addRow("", self.fullscreen_check)
+
+        self.background_combo = QComboBox()
+        self.background_combo.addItems(["None", "Camera", "Image", "Video", "YouTube"])
+        form.addRow("Background Mode:", self.background_combo)
+
+        self.feed_combo = QComboBox()
+        self.feed_combo.addItems(["15 Minutes", "30 Minutes", "1 Hour", "2 Hours"])
+        self.feed_combo.setCurrentText("1 Hour")
+        form.addRow("Feed Refresh:", self.feed_combo)
+
+        self.template_combo = QComboBox()
+        if self.parent and hasattr(self.parent, "get_available_template_names"):
+            self.template_combo.addItems(self.parent.get_available_template_names())
+        else:
+            self.template_combo.addItems(["Minimal Clock", "Daily Dashboard", "News Wall"])
+        form.addRow("Starter Template:", self.template_combo)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def apply(self):
+        if not self.parent:
+            return
+        cfg = self.parent.config
+        theme = THEME_PRESETS.get(self.theme_combo.currentText(), THEME_PRESETS["Default"])
+        for k, v in theme.items():
+            cfg[k] = v
+        cfg["fullscreen"] = self.fullscreen_check.isChecked()
+        cfg["background_mode"] = self.background_combo.currentText()
+        cfg["onboarding_completed"] = True
+        feed_map = {
+            "15 Minutes": 900000,
+            "30 Minutes": 1800000,
+            "1 Hour": 3600000,
+            "2 Hours": 7200000,
+        }
+        cfg["feed_refresh_interval_ms"] = feed_map.get(self.feed_combo.currentText(), 3600000)
+        self.parent.apply_template(self.template_combo.currentText())
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -197,6 +291,12 @@ class SettingsDialog(QDialog):
         self.text_size_slider.valueChanged.connect(self.live_update_text_size)
         app_layout.addRow("Global Text Size:", self.text_size_slider)
 
+        layout.addWidget(app_group)
+
+        # Themes Group
+        theme_group = QGroupBox("Themes")
+        theme_layout = QFormLayout(theme_group)
+
         colors_layout = QHBoxLayout()
         self.text_color_button = QPushButton("Text Color")
         self.text_color_button.clicked.connect(self.open_text_color_picker)
@@ -209,9 +309,25 @@ class SettingsDialog(QDialog):
         self.background_color_button = QPushButton("Background Color")
         self.background_color_button.clicked.connect(self.open_background_color_picker)
         colors_layout.addWidget(self.background_color_button)
-        app_layout.addRow("Colors:", colors_layout)
+        theme_layout.addRow("Theme Colors:", colors_layout)
 
-        layout.addWidget(app_group)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEME_PRESETS.keys()))
+        self.theme_combo.currentTextChanged.connect(self.live_update_theme_preset)
+        theme_layout.addRow("Theme Preset:", self.theme_combo)
+
+        self.accessibility_combo = QComboBox()
+        self.accessibility_combo.addItems([
+            "Standard",
+            "Large Text",
+            "High Contrast",
+            "Large + High Contrast",
+            "Night Mode",
+            "Matrix Mode"
+        ])
+        self.accessibility_combo.currentTextChanged.connect(self.live_update_accessibility)
+        theme_layout.addRow("Readability Preset:", self.accessibility_combo)
+        layout.addWidget(theme_group)
 
         # System Group
         sys_group = QGroupBox("System")
@@ -235,7 +351,50 @@ class SettingsDialog(QDialog):
         self.web_server_check.stateChanged.connect(self.live_update_web_server)
         sys_layout.addRow("", self.web_server_check)
 
+        self.fps_combo = QComboBox()
+        self.fps_combo.addItems(["15", "24", "30", "60"])
+        self.fps_combo.setCurrentText(str(self.config.get("camera_fps", 30)))
+        self.fps_combo.currentTextChanged.connect(self.live_update_fps)
+        sys_layout.addRow("Render FPS:", self.fps_combo)
+
+        self.low_power_check = QCheckBox("Low Power Mode")
+        self.low_power_check.setChecked(self.config.get("low_power_mode", False))
+        self.low_power_check.stateChanged.connect(self.live_update_low_power)
+        sys_layout.addRow("", self.low_power_check)
+
+        self.snap_check = QCheckBox("Snap Widgets to Grid (Edit Mode)")
+        self.snap_check.setChecked(self.config.get("snap_to_grid", True))
+        self.snap_check.stateChanged.connect(self.live_update_snap_to_grid)
+        sys_layout.addRow("", self.snap_check)
+
         layout.addWidget(sys_group)
+
+        # Profiles / Backup Group
+        profile_group = QGroupBox("Profiles")
+        profile_layout = QFormLayout(profile_group)
+        self.profile_name_input = QLineEdit(self.config.get("active_profile_name", "default"))
+        profile_layout.addRow("Profile Name:", self.profile_name_input)
+        profile_btns = QHBoxLayout()
+        self.save_profile_btn = QPushButton("Save Profile")
+        self.save_profile_btn.clicked.connect(self.save_profile)
+        self.load_profile_btn = QPushButton("Load Profile")
+        self.load_profile_btn.clicked.connect(self.load_profile)
+        profile_btns.addWidget(self.save_profile_btn)
+        profile_btns.addWidget(self.load_profile_btn)
+        profile_layout.addRow("", profile_btns)
+        layout.addWidget(profile_group)
+
+        # Diagnostics Group
+        diag_group = QGroupBox("Diagnostics")
+        diag_layout = QVBoxLayout(diag_group)
+        self.diag_label = QLabel()
+        self.diag_label.setWordWrap(True)
+        diag_layout.addWidget(self.diag_label)
+        self.refresh_diag_btn = QPushButton("Refresh Diagnostics")
+        self.refresh_diag_btn.clicked.connect(self.refresh_diagnostics)
+        diag_layout.addWidget(self.refresh_diag_btn)
+        layout.addWidget(diag_group)
+        self.refresh_diagnostics()
         layout.addStretch()
 
     def open_text_color_picker(self):
@@ -355,6 +514,111 @@ class SettingsDialog(QDialog):
         else:
             self.parent.stop_web_server()
 
+    def live_update_theme_preset(self, name):
+        preset = THEME_PRESETS.get(name)
+        if not preset:
+            return
+        for k, v in preset.items():
+            self.config[k] = v
+        self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
+        self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
+        self.parent.central_widget.update()
+
+    def live_update_accessibility(self, name):
+        if name == "Night Mode":
+            self.config["text_scale_multiplier"] = 1.0
+            self.config["text_color"] = [255, 80, 80]
+            self.config["text_shadow_color"] = [0, 0, 0]
+            self.config["background_opacity"] = max(0.2, self.config.get("background_opacity", 0.0))
+            self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
+            self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
+            self.parent.central_widget.update()
+            return
+        if name == "Matrix Mode":
+            self.config["text_scale_multiplier"] = 1.0
+            self.config["text_color"] = [80, 255, 120]
+            self.config["text_shadow_color"] = [0, 0, 0]
+            self.config["background_opacity"] = max(0.25, self.config.get("background_opacity", 0.0))
+            self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
+            self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
+            self.parent.central_widget.update()
+            return
+        if "Large" in name:
+            self.config["text_scale_multiplier"] = 1.3
+        else:
+            self.config["text_scale_multiplier"] = 1.0
+        if "High Contrast" in name:
+            self.config["text_color"] = [255, 255, 0]
+            self.config["text_shadow_color"] = [0, 0, 0]
+            self.config["background_opacity"] = max(0.2, self.config.get("background_opacity", 0.0))
+        self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
+        self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
+        self.parent.central_widget.update()
+
+    def live_update_fps(self, text):
+        try:
+            self.config["camera_fps"] = max(1, int(text))
+        except ValueError:
+            self.config["camera_fps"] = 30
+        self.parent.apply_performance_settings()
+
+    def live_update_low_power(self, state):
+        self.config["low_power_mode"] = self.low_power_check.isChecked()
+        self.parent.apply_performance_settings()
+
+    def live_update_snap_to_grid(self, state):
+        self.config["snap_to_grid"] = self.snap_check.isChecked()
+
+    def _profiles_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "profiles")
+
+    def save_profile(self):
+        name = (self.profile_name_input.text() or "default").strip()
+        safe = "".join(ch for ch in name if ch.isalnum() or ch in ("-", "_")).strip() or "default"
+        os.makedirs(self._profiles_dir(), exist_ok=True)
+        path = os.path.join(self._profiles_dir(), f"{safe}.json")
+        self.config["active_profile_name"] = safe
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2)
+            QMessageBox.information(self, "Profile Saved", f"Saved profile: {safe}")
+        except Exception as e:
+            QMessageBox.warning(self, "Profile Error", f"Could not save profile:\n{e}")
+
+    def load_profile(self):
+        os.makedirs(self._profiles_dir(), exist_ok=True)
+        path, _ = QFileDialog.getOpenFileName(self, "Load Profile", self._profiles_dir(), "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            self.parent.config.update(loaded)
+            self.parent.widget_manager.config = self.parent.config
+            self.parent.widget_manager.load_widgets()
+            self.parent.apply_performance_settings()
+            self.parent.restart_camera()
+            self.parent.central_widget.update()
+            QMessageBox.information(self, "Profile Loaded", f"Loaded: {os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.warning(self, "Profile Error", f"Could not load profile:\n{e}")
+
+    def refresh_diagnostics(self):
+        widget_count = len(self.parent.widget_manager.widgets)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fps = self.config.get("camera_fps", 30)
+        low = self.config.get("low_power_mode", False)
+        mode = self.config.get("background_mode", "Camera")
+        lines = [
+            f"Time: {now_str}",
+            f"Widgets Loaded: {widget_count}",
+            f"Background Mode: {mode}",
+            f"Render FPS: {fps}",
+            f"Low Power Mode: {'ON' if low else 'OFF'}",
+            f"Web Management: {'ON' if self.config.get('web_server_enabled') else 'OFF'}",
+        ]
+        self.diag_label.setText("\n".join(lines))
+
     def setup_widget_tab(self):
         # Use existing layout
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -373,26 +637,60 @@ class SettingsDialog(QDialog):
         # Add/Remove Controls
         controls_group = QGroupBox("Manage Widgets")
         controls_layout = QVBoxLayout(controls_group)
-        
+
+        # Widget Actions Group
+        actions_group = QGroupBox("Widget Actions")
+        actions_layout = QVBoxLayout(actions_group)
+
         add_row = QHBoxLayout()
         self.widget_combo = QComboBox()
-        self.widget_combo.addItems(sorted(WIDGET_CLASSES.keys()))
+        visible_widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
+        self.widget_combo.addItems(visible_widget_types)
         add_row.addWidget(self.widget_combo, 1)
-        
         self.add_button = QPushButton("Add")
         self.add_button.clicked.connect(self.add_widget)
         add_row.addWidget(self.add_button)
-        controls_layout.addLayout(add_row)
-        
-        btn_row = QHBoxLayout()
-        self.rename_button = QPushButton("Rename")
-        self.rename_button.clicked.connect(self.rename_widget)
-        btn_row.addWidget(self.rename_button)
+        actions_layout.addLayout(add_row)
 
+        btn_row = QHBoxLayout()
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self.remove_widget)
         btn_row.addWidget(self.remove_button)
-        controls_layout.addLayout(btn_row)
+        self.rename_button = QPushButton("Rename")
+        self.rename_button.clicked.connect(self.rename_widget)
+        btn_row.addWidget(self.rename_button)
+        actions_layout.addLayout(btn_row)
+
+        controls_layout.addWidget(actions_group)
+
+        self.widget_search = QLineEdit()
+        self.widget_search.setPlaceholderText("Search widget types...")
+        self.widget_search.textChanged.connect(self.filter_widget_types)
+        controls_layout.addWidget(self.widget_search)
+
+        # Templates Group
+        template_group = QGroupBox("Templates")
+        template_group_layout = QVBoxLayout(template_group)
+
+        template_row = QHBoxLayout()
+        self.template_combo = QComboBox()
+        self.refresh_template_choices()
+        template_row.addWidget(self.template_combo, 1)
+        self.apply_template_btn = QPushButton("Apply Template")
+        self.apply_template_btn.clicked.connect(self.apply_selected_template)
+        template_row.addWidget(self.apply_template_btn)
+        template_group_layout.addLayout(template_row)
+
+        save_template_row = QHBoxLayout()
+        self.save_template_btn = QPushButton("Save Current as Template")
+        self.save_template_btn.clicked.connect(self.save_current_as_template)
+        save_template_row.addWidget(self.save_template_btn)
+        self.remove_template_btn = QPushButton("Remove Template")
+        self.remove_template_btn.clicked.connect(self.remove_selected_template)
+        save_template_row.addWidget(self.remove_template_btn)
+        template_group_layout.addLayout(save_template_row)
+
+        controls_layout.addWidget(template_group)
         
         left_layout.addWidget(controls_group)
         splitter.addWidget(left_widget)
@@ -430,67 +728,79 @@ class SettingsDialog(QDialog):
              self.save_current_widget_ui_to_config()
              self.widget_settings_area.setProperty("current_widget", None)
 
-        current = self.widget_list.currentItem().text() if self.widget_list.currentItem() else None
+        current = self.widget_list.currentItem().data(Qt.ItemDataRole.UserRole) if self.widget_list.currentItem() else None
         self.widget_list.clear()
         for name in sorted(self.config.get("widget_positions", {})):
-            self.widget_list.addItem(name)
+            status = self.parent.get_widget_status(name)
+            display = f"{name}  [{status}]"
+            item = QListWidgetItem(display)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            self.widget_list.addItem(item)
             if name == current:
-                items = self.widget_list.findItems(name, Qt.MatchFlag.MatchExactly)
-                if items:
-                    self.widget_list.setCurrentItem(items[0])
+                self.widget_list.setCurrentItem(item)
         
         if not self.widget_list.currentItem() and self.widget_list.count() > 0:
              self.widget_list.setCurrentRow(0)
 
     def add_widget(self):
         widget_type = self.widget_combo.currentText()
-        i = 1
-        while f"{widget_type}_{i}" in self.config["widget_positions"]:
-            i += 1
-        widget_name = f"{widget_type}_{i}"
-
-        self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
-        # Default settings
-        defaults = {
-            "ical": {"urls": [], "timezone": "US/Central"},
-            "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
-            "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
-            "photomemories": {
-                "source_mode": "folder",
-                "single_file": "",
-                "folder": "",
-                "refresh_minutes": 60,
-                "max_name_chars": 45,
-                "image_scale": 0.35
-            },
-            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5},
-            "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
-            "worldclock": {"timezone": "UTC"},
-            "sports": {"configs": [], "style": "Normal", "timezone": "UTC"},
-            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"},
-            "date": {"format": "%A, %B %d, %Y"},
-            "countdown": {"name": "New Event", "datetime": ""},
-            "history": {"max_width_chars": 50}
-        }
-        self.config["widget_settings"][widget_name] = defaults.get(widget_type, {})
-
-        self.parent.widget_manager.load_widgets()
+        widget_name = self.parent.add_widget_by_type(widget_type)
+        if not widget_name:
+            return
         self.refresh_widget_list()
-        items = self.widget_list.findItems(widget_name, Qt.MatchFlag.MatchExactly)
-        if items:
-            self.widget_list.setCurrentItem(items[0])
+        for i in range(self.widget_list.count()):
+            it = self.widget_list.item(i)
+            if it.data(Qt.ItemDataRole.UserRole) == widget_name:
+                self.widget_list.setCurrentItem(it)
+                break
+
+    def filter_widget_types(self, text):
+        text = (text or "").strip().lower()
+        visible_widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
+        if text:
+            visible_widget_types = [w for w in visible_widget_types if text in w.lower()]
+        self.widget_combo.clear()
+        self.widget_combo.addItems(visible_widget_types)
+
+    def apply_selected_template(self):
+        self.parent.apply_template(self.template_combo.currentText())
+        self.refresh_widget_list()
+
+    def refresh_template_choices(self):
+        current = self.template_combo.currentText() if hasattr(self, "template_combo") else ""
+        self.template_combo.clear()
+        self.template_combo.addItems(self.parent.get_available_template_names())
+        if current:
+            idx = self.template_combo.findText(current)
+            if idx >= 0:
+                self.template_combo.setCurrentIndex(idx)
+
+    def save_current_as_template(self):
+        name, ok = QInputDialog.getText(self, "Save Template", "Template Name:")
+        if not ok or not name.strip():
+            return
+        safe = self.parent.save_current_as_template(name.strip())
+        self.refresh_template_choices()
+        idx = self.template_combo.findText(safe)
+        if idx >= 0:
+            self.template_combo.setCurrentIndex(idx)
+
+    def remove_selected_template(self):
+        name = self.template_combo.currentText().strip()
+        if not name:
+            return
+        if not self.parent.remove_saved_template(name):
+            QMessageBox.information(self, "Template", f"Cannot remove built-in template: {name}")
+            return
+        self.refresh_template_choices()
 
     def remove_widget(self):
         current_item = self.widget_list.currentItem()
         if not current_item:
             QMessageBox.warning(self, "Warning", "Please select a widget to remove.")
             return
-        widget_name = current_item.text()
-        reply = QMessageBox.question(self, "Confirm", f"Remove {widget_name}?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            self.config["widget_positions"].pop(widget_name, None)
-            self.config["widget_settings"].pop(widget_name, None)
-            self.parent.widget_manager.load_widgets()
+        widget_name = current_item.data(Qt.ItemDataRole.UserRole)
+        if self.parent.remove_widget_by_name(widget_name, confirm=True):
             self.refresh_widget_list()
             # Clear settings area
             new_container = QWidget()
@@ -505,7 +815,7 @@ class SettingsDialog(QDialog):
         current_item = self.widget_list.currentItem()
         if not current_item:
             return
-        old_name = current_item.text()
+        old_name = current_item.data(Qt.ItemDataRole.UserRole)
         new_name, ok = QInputDialog.getText(self, "Rename Widget", "New Name:", text=old_name)
         if ok and new_name and new_name != old_name:
             if new_name in self.config["widget_positions"]:
@@ -520,11 +830,15 @@ class SettingsDialog(QDialog):
             self.config["widget_settings"][new_name] = self.config["widget_settings"].pop(old_name)
             
             # Update UI
-            current_item.setText(new_name)
             self.widget_settings_area.setProperty("current_widget", new_name)
             self.settings_title.setText(f"Settings: {new_name}")
-            
             self.parent.widget_manager.load_widgets()
+            self.refresh_widget_list()
+            for i in range(self.widget_list.count()):
+                it = self.widget_list.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == new_name:
+                    self.widget_list.setCurrentItem(it)
+                    break
 
     def add_list_item(self, list_widget):
         item = QListWidgetItem("New Item")
@@ -570,7 +884,7 @@ class SettingsDialog(QDialog):
         if not item:
             return
 
-        new_widget_name = item.text()
+        new_widget_name = item.data(Qt.ItemDataRole.UserRole) or item.text()
         current_widget_name = self.widget_settings_area.property("current_widget")
 
         # Save previous settings if any
@@ -892,6 +1206,87 @@ class SettingsDialog(QDialog):
             scale_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Image Scale (% width):", scale_slider)
 
+        elif widget_type == "flightboard":
+            entry = QLineEdit(); entry.setObjectName("flight_number_entry")
+            entry.setText(settings.get("flight_number", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Flight # (e.g. AA100):", entry)
+
+            entry = QLineEdit(); entry.setObjectName("flight_api_key_entry")
+            entry.setText(settings.get("api_key", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("AviationStack API Key:", entry)
+
+        elif widget_type == "energyprice":
+            combo = QComboBox(); combo.setObjectName("energy_mode_combo")
+            combo.addItems(["manual", "url"])
+            combo.setCurrentText(settings.get("mode", "manual"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Mode:", combo)
+
+            entry = QLineEdit(); entry.setObjectName("energy_manual_price_entry")
+            entry.setText(str(settings.get("manual_price", 0.12)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Manual Price:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("energy_currency_entry")
+            entry.setText(settings.get("currency_symbol", "$"))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Currency Symbol:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("energy_unit_entry")
+            entry.setText(settings.get("unit", "kWh"))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Unit:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("energy_url_entry")
+            entry.setText(settings.get("price_url", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Price JSON URL:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("energy_json_key_entry")
+            entry.setText(settings.get("json_key", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("JSON Path (dot):", entry)
+
+        elif widget_type == "package":
+            entry = QLineEdit(); entry.setObjectName("package_company_entry")
+            entry.setText(settings.get("company", "ups"))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Company Slug:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("package_tracking_entry")
+            entry.setText(settings.get("tracking_number", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Tracking Number:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("package_api_key_entry")
+            entry.setText(settings.get("api_key", ""))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("AfterShip API Key:", entry)
+
+        elif widget_type in ("sunrise", "sunrisesunset"):
+            entry = QLineEdit(); entry.setObjectName("sun_lat_entry")
+            entry.setText(str(settings.get("lat", 38.624)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Latitude:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("sun_lon_entry")
+            entry.setText(str(settings.get("lon", -90.184)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Longitude:", entry)
+
+        elif widget_type == "astronomy":
+            entry = QLineEdit(); entry.setObjectName("astro_lat_entry")
+            entry.setText(str(settings.get("lat", 38.624)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Latitude:", entry)
+
+            entry = QLineEdit(); entry.setObjectName("astro_lon_entry")
+            entry.setText(str(settings.get("lon", -90.184)))
+            entry.textChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Longitude:", entry)
+
     def save_current_widget_ui_to_config(self, *args): # Modified to accept *args
         widget_name = self.widget_settings_area.property("current_widget")
         if not widget_name:
@@ -1041,6 +1436,51 @@ class SettingsDialog(QDialog):
                     widget._update_text()
                 except Exception as e:
                     print(f"Photo widget immediate update error: {e}")
+        elif widget_type == "flightboard":
+            entry = self.widget_settings_area.findChild(QLineEdit, "flight_number_entry")
+            if entry: settings["flight_number"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "flight_api_key_entry")
+            if entry: settings["api_key"] = entry.text()
+        elif widget_type == "energyprice":
+            combo = self.widget_settings_area.findChild(QComboBox, "energy_mode_combo")
+            if combo: settings["mode"] = combo.currentText()
+            entry = self.widget_settings_area.findChild(QLineEdit, "energy_manual_price_entry")
+            if entry:
+                try: settings["manual_price"] = float(entry.text())
+                except ValueError: pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "energy_currency_entry")
+            if entry: settings["currency_symbol"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "energy_unit_entry")
+            if entry: settings["unit"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "energy_url_entry")
+            if entry: settings["price_url"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "energy_json_key_entry")
+            if entry: settings["json_key"] = entry.text()
+        elif widget_type == "package":
+            entry = self.widget_settings_area.findChild(QLineEdit, "package_company_entry")
+            if entry: settings["company"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "package_tracking_entry")
+            if entry: settings["tracking_number"] = entry.text()
+            entry = self.widget_settings_area.findChild(QLineEdit, "package_api_key_entry")
+            if entry: settings["api_key"] = entry.text()
+        elif widget_type in ("sunrise", "sunrisesunset"):
+            entry = self.widget_settings_area.findChild(QLineEdit, "sun_lat_entry")
+            if entry:
+                try: settings["lat"] = float(entry.text())
+                except ValueError: pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "sun_lon_entry")
+            if entry:
+                try: settings["lon"] = float(entry.text())
+                except ValueError: pass
+        elif widget_type == "astronomy":
+            entry = self.widget_settings_area.findChild(QLineEdit, "astro_lat_entry")
+            if entry:
+                try: settings["lat"] = float(entry.text())
+                except ValueError: pass
+            entry = self.widget_settings_area.findChild(QLineEdit, "astro_lon_entry")
+            if entry:
+                try: settings["lon"] = float(entry.text())
+                except ValueError: pass
         
         self.parent.central_widget.update()
 
@@ -1080,6 +1520,11 @@ class MagicMirrorApp(QMainWindow):
         super().__init__()
         self.edit_mode = False
         self.drag_data = {"widget": None, "start_pos": None, "start_widget_pos": None}
+        self.widget_delete_hitboxes = {}
+        self.add_widget_button_rect = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self.alignment_guides = []
         self.error_message = ""
         self.config_mutex = QMutex()
         self.web_server = None
@@ -1103,6 +1548,7 @@ class MagicMirrorApp(QMainWindow):
         self.setup_camera()
         self.setup_overlay()
         self.set_fullscreen(self.config.get("fullscreen", True))
+        self.apply_performance_settings()
         
         # Ticker timer
         self.ticker_timer = QTimer(self)
@@ -1117,6 +1563,7 @@ class MagicMirrorApp(QMainWindow):
         # Start Web Server if enabled
         if self.config.get("web_server_enabled", False):
             self.start_web_server()
+        self.show_onboarding_if_needed()
 
     @staticmethod
     def detect_available_cameras():
@@ -1136,6 +1583,240 @@ class MagicMirrorApp(QMainWindow):
         if mode in ["Camera", "Video", "YouTube"]: return hasattr(self, "cap") and self.cap is not None and self.cap.isOpened()
         return False
 
+    def get_default_widget_settings(self, widget_type):
+        defaults = {
+            "ical": {"urls": [], "timezone": "US/Central"},
+            "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
+            "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
+            "photomemories": {
+                "source_mode": "folder",
+                "single_file": "",
+                "folder": "",
+                "refresh_minutes": 60,
+                "max_name_chars": 45,
+                "image_scale": 0.35
+            },
+            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5},
+            "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
+            "worldclock": {"timezone": "UTC"},
+            "sports": {"configs": [], "style": "Normal", "timezone": "UTC"},
+            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"},
+            "date": {"format": "%A, %B %d, %Y"},
+            "countdown": {"name": "New Event", "datetime": ""},
+            "history": {"max_width_chars": 50},
+            "flightboard": {"flight_number": "", "api_key": ""},
+            "energyprice": {"mode": "manual", "manual_price": 0.12, "currency_symbol": "$", "unit": "kWh", "price_url": "", "json_key": ""},
+            "package": {"company": "ups", "tracking_number": "", "api_key": ""},
+            "sunrise": {"lat": 38.624, "lon": -90.184},
+            "sunrisesunset": {"lat": 38.624, "lon": -90.184},
+            "astronomy": {"lat": 38.624, "lon": -90.184}
+        }
+        return dict(defaults.get(widget_type, {}))
+
+    def add_widget_by_type(self, widget_type):
+        if "widget_positions" not in self.config:
+            self.config["widget_positions"] = {}
+        if "widget_settings" not in self.config:
+            self.config["widget_settings"] = {}
+        i = 1
+        while f"{widget_type}_{i}" in self.config["widget_positions"]:
+            i += 1
+        widget_name = f"{widget_type}_{i}"
+        self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
+        self.config["widget_settings"][widget_name] = self.get_default_widget_settings(widget_type)
+        self.widget_manager.load_widgets()
+        self.central_widget.update()
+        self.save_config()
+        return widget_name
+
+    def remove_widget_by_name(self, widget_name, confirm=True):
+        if widget_name not in self.config.get("widget_positions", {}):
+            return False
+        if confirm:
+            reply = QMessageBox.question(
+                self,
+                "Confirm",
+                f"Remove {widget_name}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+        self.config["widget_positions"].pop(widget_name, None)
+        self.config["widget_settings"].pop(widget_name, None)
+        self.widget_manager.load_widgets()
+        self.central_widget.update()
+        self.save_config()
+        return True
+
+    def get_widget_status(self, widget_name):
+        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        widget_type = widget_name.split("_")[0]
+        required = {
+            "ical": ["urls"],
+            "rss": ["urls"],
+            "commute": ["urls"],
+            "dailyagenda": ["urls"],
+            "stock": ["api_key"],
+            "flightboard": ["flight_number", "api_key"],
+            "package": ["company", "tracking_number", "api_key"],
+            "photomemories": ["folder"],
+        }
+        needed = required.get(widget_type, [])
+        for key in needed:
+            value = settings.get(key)
+            if widget_type == "photomemories" and key == "folder":
+                if settings.get("source_mode", "folder") == "single":
+                    value = settings.get("single_file")
+            if isinstance(value, list) and len(value) == 0:
+                return "Needs Setup"
+            if value in ("", None):
+                return "Needs Setup"
+        return "OK"
+
+    def get_builtin_template_map(self):
+        return {
+            "Minimal Clock": ["time", "date"],
+            "Daily Dashboard": ["time", "date", "weatherforecast", "dailyagenda", "commute"],
+            "News Wall": ["time", "date", "rss"],
+        }
+
+    def _templates_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "templates")
+
+    def get_available_template_names(self):
+        names = list(self.get_builtin_template_map().keys())
+        try:
+            os.makedirs(self._templates_dir(), exist_ok=True)
+            for fn in sorted(os.listdir(self._templates_dir())):
+                if fn.lower().endswith(".json"):
+                    names.append(os.path.splitext(fn)[0])
+        except Exception:
+            pass
+        return names
+
+    def save_current_as_template(self, template_name):
+        safe = "".join(ch for ch in template_name if ch.isalnum() or ch in (" ", "-", "_")).strip() or "Template"
+        path = os.path.join(self._templates_dir(), f"{safe}.json")
+        os.makedirs(self._templates_dir(), exist_ok=True)
+        payload = {
+            "widget_positions": self.config.get("widget_positions", {}),
+            "widget_settings": self.config.get("widget_settings", {}),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return safe
+
+    def remove_saved_template(self, template_name):
+        # Built-ins are not deletable.
+        if template_name in self.get_builtin_template_map():
+            return False
+        safe = "".join(ch for ch in template_name if ch.isalnum() or ch in (" ", "-", "_")).strip()
+        if not safe:
+            return False
+        path = os.path.join(self._templates_dir(), f"{safe}.json")
+        if not os.path.exists(path):
+            return False
+        reply = QMessageBox.question(
+            self,
+            "Remove Template",
+            f"Remove template '{template_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+        try:
+            os.remove(path)
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Template Error", f"Could not remove template:\n{e}")
+            return False
+
+    def apply_template(self, template_name):
+        # Built-in templates are additive safety presets; custom templates restore exact saved set.
+        template_map = self.get_builtin_template_map()
+        if template_name not in template_map:
+            path = os.path.join(self._templates_dir(), f"{template_name}.json")
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    self.config["widget_positions"] = data.get("widget_positions", {})
+                    self.config["widget_settings"] = data.get("widget_settings", {})
+                    self.widget_manager.load_widgets()
+                    self.central_widget.update()
+                    self.save_config()
+                    return
+                except Exception as e:
+                    QMessageBox.warning(self, "Template Error", f"Could not load template '{template_name}':\n{e}")
+                    return
+
+        for idx, wtype in enumerate(template_map.get(template_name, []), start=1):
+            existing = [name for name in self.config.get("widget_positions", {}) if name.startswith(f"{wtype}_")]
+            if existing:
+                continue
+            name = self.add_widget_by_type(wtype)
+            if name:
+                col = (idx - 1) % 3
+                row = (idx - 1) // 3
+                self.config["widget_positions"][name]["x"] = 0.2 + col * 0.3
+                self.config["widget_positions"][name]["y"] = 0.2 + row * 0.25
+                self.config["widget_positions"][name]["anchor"] = "nw"
+        self.widget_manager.load_widgets()
+        self.central_widget.update()
+        self.save_config()
+
+    def show_onboarding_if_needed(self):
+        if self.config.get("onboarding_completed", False):
+            return
+        dialog = OnboardingDialog(self)
+        if dialog.exec():
+            dialog.apply()
+            self.apply_performance_settings()
+            self.widget_manager.load_widgets()
+            self.restart_camera()
+            self.set_fullscreen(self.config.get("fullscreen", True))
+            self.save_config()
+
+    def apply_performance_settings(self):
+        fps = int(self.config.get("camera_fps", 30))
+        if self.config.get("low_power_mode", False):
+            fps = min(fps, 15)
+            self.config["feed_refresh_interval_ms"] = max(3600000, int(self.config.get("feed_refresh_interval_ms", 3600000)))
+        interval_ms = max(1, int(1000 / max(1, fps)))
+        if hasattr(self, "timer") and self.timer:
+            self.timer.start(interval_ms)
+        if hasattr(self, "preview_capture_timer") and self.preview_capture_timer:
+            self.preview_capture_timer.start(200 if self.config.get("low_power_mode", False) else 100)
+        if hasattr(self, "ticker_timer") and self.ticker_timer:
+            self.ticker_timer.start(50 if self.config.get("low_power_mode", False) else 30)
+
+    def push_undo_snapshot(self):
+        snapshot = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        self.undo_stack.append(snapshot)
+        if len(self.undo_stack) > 100:
+            self.undo_stack = self.undo_stack[-100:]
+        self.redo_stack.clear()
+
+    def undo_layout_change(self):
+        if not self.undo_stack:
+            return
+        current = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        self.redo_stack.append(current)
+        self.config["widget_positions"] = self.undo_stack.pop()
+        self.widget_manager.load_widgets()
+        self.central_widget.update()
+        self.save_config()
+
+    def redo_layout_change(self):
+        if not self.redo_stack:
+            return
+        current = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        self.undo_stack.append(current)
+        self.config["widget_positions"] = self.redo_stack.pop()
+        self.widget_manager.load_widgets()
+        self.central_widget.update()
+        self.save_config()
+
     def load_config(self):
         default_config = {
             "camera_index": 0,
@@ -1154,7 +1835,13 @@ class MagicMirrorApp(QMainWindow):
             "FMP_API_KEY": "YOUR_FMP_API_KEY",
             "font_family": "Helvetica",
             "background_opacity": 0.0,
-            "web_server_enabled": False
+            "web_server_enabled": False,
+            "camera_fps": 30,
+            "low_power_mode": False,
+            "snap_to_grid": True,
+            "grid_size": 0.01,
+            "onboarding_completed": False,
+            "active_profile_name": "default"
         }
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
@@ -1167,6 +1854,13 @@ class MagicMirrorApp(QMainWindow):
                         self.config[k] = v
             except (json.JSONDecodeError, IOError):
                 self.config = default_config
+        try:
+            current_grid = float(self.config.get("grid_size", 0.01))
+        except (TypeError, ValueError):
+            current_grid = 0.01
+        # keep snapping fine-grained by default
+        if current_grid > 0.01:
+            self.config["grid_size"] = 0.01
         self.save_config()
 
     def save_config(self):
@@ -1271,7 +1965,8 @@ class MagicMirrorApp(QMainWindow):
         if not hasattr(self, "timer") or not self.timer.isActive():
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_camera_feed)
-            self.timer.start(30)
+            fps = max(1, int(self.config.get("camera_fps", 30)))
+            self.timer.start(max(1, int(1000 / fps)))
             
         if not had_error:
             self.clear_error_message()
@@ -1370,14 +2065,40 @@ class MagicMirrorApp(QMainWindow):
 
     def draw_all_widgets(self, painter):
         with QMutexLocker(self.config_mutex):
+            self.widget_delete_hitboxes = {}
+            self.add_widget_button_rect = None
             self.widget_manager.draw_all(painter, self)
             if self.edit_mode:
                 painter.setPen(QColor(0, 255, 0, 200))
                 painter.setBrush(QColor(0, 255, 0, 50))
+                for guide in self.alignment_guides:
+                    painter.setPen(QColor(255, 220, 0, 180))
+                    if guide.get("axis") == "x":
+                        x = int(guide["value"])
+                        painter.drawLine(x, 0, x, self.central_widget.height())
+                    else:
+                        y = int(guide["value"])
+                        painter.drawLine(0, y, self.central_widget.width(), y)
+                painter.setPen(QColor(0, 255, 0, 200))
                 for name in self.config["widget_positions"]:
                     bbox = self.get_widget_bbox(name)
                     if bbox:
                         painter.drawRect(bbox)
+                        btn_size = 20
+                        btn_rect = QRect(bbox.right() - btn_size + 1, bbox.top(), btn_size, btn_size)
+                        self.widget_delete_hitboxes[name] = btn_rect
+                        painter.setBrush(QColor(220, 40, 40, 220))
+                        painter.setPen(QColor(255, 255, 255))
+                        painter.drawRect(btn_rect)
+                        painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
+
+                plus_size = 30
+                plus_rect = QRect(self.central_widget.width() - plus_size - 15, 65, plus_size, plus_size)
+                self.add_widget_button_rect = plus_rect
+                painter.setBrush(QColor(40, 160, 60, 220))
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawEllipse(plus_rect)
+                painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
     @staticmethod
     def _get_top_left_for_anchor(anchor, anchor_point, width, height):
@@ -1398,12 +2119,13 @@ class MagicMirrorApp(QMainWindow):
             return None
         widget_type = widget_name.split("_")[0]
 
-        if widget_type == "photomemories":
+        if widget_type in ("photomemories",):
             settings = self.config.get("widget_settings", {}).get(widget_name, {})
             try:
-                scale = float(settings.get("image_scale", 0.35))
+                default_scale = 0.35 if widget_type == "photomemories" else 0.3
+                scale = float(settings.get("image_scale", default_scale))
             except (TypeError, ValueError):
-                scale = 0.35
+                scale = default_scale
             scale = max(0.1, min(1.0, scale))
 
             base_width = max(120, int(self.central_widget.width() * scale))
@@ -1593,10 +2315,20 @@ class MagicMirrorApp(QMainWindow):
 
     def central_widget_mouse_press(self, event):
         if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
+            click_point = event.position().toPoint()
+            if self.add_widget_button_rect and self.add_widget_button_rect.contains(click_point):
+                self.add_widget_from_edit_overlay()
+                return
+            for name, rect in list(self.widget_delete_hitboxes.items()):
+                if rect.contains(click_point):
+                    self.remove_widget_by_name(name, confirm=True)
+                    self.widget_delete_hitboxes = {}
+                    self.central_widget.update()
+                    return
             with QMutexLocker(self.config_mutex):
                 for name in reversed(list(self.config["widget_positions"])):
                     bbox = self.get_widget_bbox(name)
-                    if bbox and bbox.contains(event.position().toPoint()):
+                    if bbox and bbox.contains(click_point):
                         # Switch anchor to 'nw' to keep top-left corner in spot
                         pos_config = self.config["widget_positions"][name]
                         if pos_config.get("anchor") != "nw":
@@ -1612,7 +2344,23 @@ class MagicMirrorApp(QMainWindow):
                             "start_pos": event.position().toPoint(),
                             "start_widget_pos": self.config["widget_positions"][name].copy(),
                         }
+                        self.push_undo_snapshot()
                         return
+
+    def add_widget_from_edit_overlay(self):
+        widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
+        widget_type, ok = QInputDialog.getItem(
+            self,
+            "Add Widget",
+            "Widget Type:",
+            widget_types,
+            0,
+            False
+        )
+        if not ok or not widget_type:
+            return
+        widget_name = self.add_widget_by_type(widget_type)
+        self.open_settings_dialog(widget_name=widget_name, widget_tab=True)
 
     def central_widget_mouse_move(self, event):
         if self.edit_mode and self.drag_data["widget"] and event.buttons() & Qt.MouseButton.LeftButton:
@@ -1625,16 +2373,34 @@ class MagicMirrorApp(QMainWindow):
                 with QMutexLocker(self.config_mutex):
                     new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
                     new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
+                    if self.config.get("snap_to_grid", True):
+                        g = float(self.config.get("grid_size", 0.05))
+                        if g > 0:
+                            new_x = round(new_x / g) * g
+                            new_y = round(new_y / g) * g
                     self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
                     self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
+                    self.alignment_guides = []
+                    center_tol = 0.02
+                    if abs(new_x - 0.5) <= center_tol:
+                        self.alignment_guides.append({"axis": "x", "value": self.central_widget.width() * 0.5})
+                    if abs(new_y - 0.5) <= center_tol:
+                        self.alignment_guides.append({"axis": "y", "value": self.central_widget.height() * 0.5})
                 self.central_widget.update()
 
     def central_widget_mouse_release(self, event):
         if self.edit_mode and self.drag_data["widget"] and event.button() == Qt.MouseButton.LeftButton:
             self.drag_data["widget"] = None
+            self.alignment_guides = []
             self.save_config()
 
     def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
+            self.undo_layout_change()
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Y:
+            self.redo_layout_change()
+            return
         if event.key() == Qt.Key.Key_Escape:
             self.set_fullscreen(False)
         elif event.key() == Qt.Key.Key_F11:
@@ -1642,15 +2408,26 @@ class MagicMirrorApp(QMainWindow):
         elif event.key() == Qt.Key.Key_E:
             self.edit_button.toggle()
 
-    def open_settings_dialog(self):
+    def open_settings_dialog(self, widget_name=None, widget_tab=False):
         dialog = SettingsDialog(self)
-        if self.sender() == self.edit_button:
+        if widget_tab or self.sender() == self.edit_button:
             dialog.tabs.setCurrentIndex(1)
+        if widget_name:
+            dialog.refresh_widget_list()
+            for i in range(dialog.widget_list.count()):
+                it = dialog.widget_list.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == widget_name:
+                    dialog.widget_list.setCurrentItem(it)
+                    break
         dialog.exec()
 
     def toggle_edit_mode(self):
         self.edit_mode = not self.edit_mode
         self.edit_button.setChecked(self.edit_mode)
+        if not self.edit_mode:
+            self.widget_delete_hitboxes = {}
+            self.add_widget_button_rect = None
+        self.central_widget.update()
         # Removed the popup message
         # QMessageBox.information(self, "Edit Mode", f"Drag and drop is now {'enabled' if self.edit_mode else 'disabled'}.")
 

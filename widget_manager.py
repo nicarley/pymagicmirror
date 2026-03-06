@@ -13,6 +13,7 @@ import os
 import random
 import socket
 import textwrap
+import math
 
 # Try to import psutil for system stats
 try:
@@ -35,6 +36,9 @@ SPORTS_API_URLS = {
 }
 
 HISTORY_API_URL = "https://history.muffinlabs.com/date"
+SUN_API_URL = "https://api.sunrise-sunset.org/json"
+RAINVIEWER_API_URL = "https://api.rainviewer.com/public/weather-maps.json"
+AFTERSHIP_API_BASE = "https://api.aftership.com/tracking/2024-07/trackings"
 
 FMP_API_KEY = os.environ.get("FMP_API_KEY") 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/quote/"
@@ -274,6 +278,12 @@ class BaseWidget:
             "commute": {"scale": 0.9, "thick": 1},
             "dailyagenda": {"scale": 0.9, "thick": 1},
             "photomemories": {"scale": 0.9, "thick": 1},
+            "flightboard": {"scale": 0.9, "thick": 1},
+            "energyprice": {"scale": 1.0, "thick": 1},
+            "package": {"scale": 0.9, "thick": 1},
+            "sunrise": {"scale": 1.0, "thick": 1},
+            "sunrisesunset": {"scale": 1.0, "thick": 1},
+            "astronomy": {"scale": 0.9, "thick": 1},
         }
         return all_params.get(widget_type, {"scale": 1, "thick": 2})
 
@@ -1176,6 +1186,251 @@ class MoonWidget(BaseWidget):
         # Update every 4 hours
         self.update_timer = app.after(14400000, lambda: self.update(app))
 
+class FlightBoardWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            api_key = settings.get("api_key", "").strip()
+            flight_number = settings.get("flight_number", "").strip()
+            if not api_key:
+                self.set_error("api_key", app, "Flight Board\nSet aviationstack API key")
+                return
+            if not flight_number:
+                self.set_error("flight", app, "Flight Board\nSet a flight number")
+                return
+
+            url = "http://api.aviationstack.com/v1/flights"
+            resp = SESSION.get(
+                url,
+                params={"access_key": api_key, "flight_iata": flight_number, "limit": 1},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+            if not data:
+                self.set_text(f"Flight Board\n{flight_number}: No data", app)
+                return
+
+            f = data[0]
+            dep_iata = f.get("departure", {}).get("iata", "???")
+            arr_iata = f.get("arrival", {}).get("iata", "???")
+            dep_t = f.get("departure", {}).get("scheduled", "")
+            arr_t = f.get("arrival", {}).get("scheduled", "")
+            status = f.get("flight_status", "unknown")
+
+            def fmt(ts):
+                if not ts:
+                    return "N/A"
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    return dt.strftime("%m/%d %I:%M %p")
+                except Exception:
+                    return ts
+
+            self.mark_updated()
+            self.set_text(
+                f"Flight {flight_number}\n{dep_iata} -> {arr_iata}\nDep {fmt(dep_t)}\nArr {fmt(arr_t)}\nStatus: {status}",
+                app,
+            )
+        except Exception as e:
+            print(f"Flight board error: {e}")
+            self.set_error("error", app, "Flight Board  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class EnergyPriceWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            mode = settings.get("mode", "manual")
+            unit = settings.get("unit", "kWh")
+            symbol = settings.get("currency_symbol", "$")
+
+            if mode == "manual":
+                try:
+                    price = float(settings.get("manual_price", 0.0))
+                except (TypeError, ValueError):
+                    price = 0.0
+                self.mark_updated()
+                self.set_text(f"Energy Price\n{symbol}{price:.3f}/{unit}\nMode: Manual", app)
+                return
+
+            url = settings.get("price_url", "").strip()
+            json_key = settings.get("json_key", "").strip()
+            if not url or not json_key:
+                self.set_error("config", app, "Energy Price\nSet URL + JSON key")
+                return
+
+            resp = SESSION.get(url, timeout=10)
+            resp.raise_for_status()
+            payload = resp.json()
+            value = payload
+            for part in json_key.split("."):
+                if isinstance(value, list):
+                    value = value[int(part)]
+                else:
+                    value = value.get(part)
+            price = float(value)
+            self.mark_updated()
+            self.set_text(f"Energy Price\n{symbol}{price:.3f}/{unit}\nMode: URL", app)
+        except Exception as e:
+            print(f"Energy price error: {e}")
+            self.set_error("error", app, "Energy Price  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class PackageWidget(BaseWidget):
+    def _update_text_worker(self, app):
+        try:
+            settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            api_key = settings.get("api_key", "").strip()
+            slug = settings.get("company", "").strip().lower()
+            tracking_number = settings.get("tracking_number", "").strip()
+
+            if not api_key:
+                self.set_error("api_key", app, "Package\nSet AfterShip API key")
+                return
+            if not slug or not tracking_number:
+                self.set_error("tracking", app, "Package\nSet company + tracking number")
+                return
+
+            url = f"{AFTERSHIP_API_BASE}/{slug}/{tracking_number}"
+            resp = SESSION.get(url, headers={"aftership-api-key": api_key}, timeout=10)
+            resp.raise_for_status()
+            tracking = resp.json().get("data", {}).get("tracking", {})
+            tag = tracking.get("tag", "Unknown")
+            checkpoints = tracking.get("checkpoints", [])
+            last_msg = checkpoints[0].get("message", "") if checkpoints else "No status updates"
+            self.mark_updated()
+            self.set_text(f"Package ({slug.upper()})\n{tracking_number}\nStatus: {tag}\n{last_msg}", app)
+        except Exception as e:
+            print(f"Package widget error: {e}")
+            self.set_error("error", app, "Package  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+class SunriseWidget(BaseWidget):
+    @staticmethod
+    def _format_day_length(day_length_raw):
+        # API may return "HH:MM:SS" or raw seconds depending on provider/version.
+        if day_length_raw is None:
+            return "N/A"
+        day_length_str = str(day_length_raw).strip()
+        if ":" in day_length_str:
+            return day_length_str
+        try:
+            total_seconds = int(float(day_length_str))
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except (TypeError, ValueError):
+            return day_length_str
+
+    def _update_text_worker(self, app):
+        try:
+            settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            lat = float(settings.get("lat", 38.624))
+            lon = float(settings.get("lon", -90.184))
+            resp = SESSION.get(SUN_API_URL, params={"lat": lat, "lng": lon, "formatted": 0}, timeout=10)
+            resp.raise_for_status()
+            results = resp.json().get("results", {})
+            sunrise = datetime.fromisoformat(results.get("sunrise").replace("Z", "+00:00")).astimezone()
+            sunset = datetime.fromisoformat(results.get("sunset").replace("Z", "+00:00")).astimezone()
+            day_len = self._format_day_length(results.get("day_length", ""))
+            self.mark_updated()
+            self.set_text(
+                f"Sunrise / Sunset\nSunrise: {sunrise.strftime('%I:%M %p')}\nSunset: {sunset.strftime('%I:%M %p')}\nDay: {day_len}",
+                app,
+            )
+        except Exception as e:
+            print(f"Sunrise widget error: {e}")
+            self.set_error("error", app, "Sunrise  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(900000, lambda: self.update(app))
+
+class AstronomyWidget(BaseWidget):
+    @staticmethod
+    def _moon_illumination_fraction(now_dt):
+        # Approximate moon illumination using synodic month.
+        known_new_moon = datetime(2000, 1, 6, 18, 14)
+        synodic = 29.53058867
+        days = (now_dt - known_new_moon).total_seconds() / 86400.0
+        phase = (days % synodic) / synodic
+        return 0.5 * (1 - math.cos(2 * math.pi * phase))
+
+    def _update_text_worker(self, app):
+        try:
+            settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+            lat = float(settings.get("lat", 38.624))
+            lon = float(settings.get("lon", -90.184))
+            now = datetime.now()
+            illum = self._moon_illumination_fraction(now) * 100.0
+
+            resp = SESSION.get(SUN_API_URL, params={"lat": lat, "lng": lon, "formatted": 0}, timeout=10)
+            resp.raise_for_status()
+            results = resp.json().get("results", {})
+            civil_twilight_end = datetime.fromisoformat(
+                results.get("civil_twilight_end").replace("Z", "+00:00")
+            ).astimezone()
+            astronomical_twilight_end = datetime.fromisoformat(
+                results.get("astronomical_twilight_end").replace("Z", "+00:00")
+            ).astimezone()
+
+            # ISS pass times from Open Notify (best-effort; service can be intermittently unavailable).
+            iss_line = "ISS Next Pass: unavailable"
+            try:
+                iss_resp = SESSION.get(
+                    "http://api.open-notify.org/iss-pass.json",
+                    params={"lat": lat, "lon": lon, "n": 1},
+                    timeout=10
+                )
+                iss_resp.raise_for_status()
+                iss_data = iss_resp.json()
+                passes = iss_data.get("response", [])
+                if passes:
+                    next_pass = passes[0]
+                    rise_dt = datetime.fromtimestamp(int(next_pass.get("risetime", 0))).astimezone()
+                    duration = int(next_pass.get("duration", 0))
+                    iss_line = f"ISS: {rise_dt.strftime('%a %I:%M %p')} ({duration//60}m {duration%60}s)"
+            except Exception as e:
+                print(f"Astronomy ISS lookup error: {e}")
+
+            self.mark_updated()
+            self.set_text(
+                "Astronomy\n"
+                f"Moon Illumination: {illum:.0f}%\n"
+                f"Civil Dark: {civil_twilight_end.strftime('%I:%M %p')}\n"
+                f"Astro Dark: {astronomical_twilight_end.strftime('%I:%M %p')}\n"
+                f"{iss_line}",
+                app,
+            )
+        except Exception as e:
+            print(f"Astronomy widget error: {e}")
+            self.set_error("error", app, "Astronomy  Error")
+
+    def update(self, app):
+        thread = threading.Thread(target=self._update_text_worker, args=(app,))
+        thread.daemon = True
+        thread.start()
+        self.update_timer = app.after(3600000, lambda: self.update(app))
+
 WIDGET_CLASSES = {
     "time": TimeWidget,
     "date": DateWidget,
@@ -1195,6 +1450,12 @@ WIDGET_CLASSES = {
     "commute": CommuteWidget,
     "dailyagenda": DailyAgendaWidget,
     "photomemories": PhotoMemoriesWidget,
+    "flightboard": FlightBoardWidget,
+    "energyprice": EnergyPriceWidget,
+    "package": PackageWidget,
+    "sunrise": SunriseWidget,
+    "sunrisesunset": SunriseWidget,
+    "astronomy": AstronomyWidget,
 }
 
 class WidgetManager:
