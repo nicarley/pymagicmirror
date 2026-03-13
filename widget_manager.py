@@ -108,6 +108,8 @@ def collect_ical_urls(config, widget_name):
     return fallback_urls
 
 def _normalize_ical_datetime(dt_value):
+    if dt_value is None:
+        return None, None
     if isinstance(dt_value, datetime):
         event_dt = dt_value
         is_dt = True
@@ -122,6 +124,21 @@ def _normalize_ical_datetime(dt_value):
     else:
         event_dt = event_dt.astimezone(pytz.utc)
     return event_dt, is_dt
+
+
+def _get_event_end(component, event_dt, is_dt):
+    dtend_prop = component.get("dtend")
+    if dtend_prop:
+        end_dt, _ = _normalize_ical_datetime(dtend_prop.dt)
+        if end_dt is not None:
+            return end_dt
+    duration_prop = component.get("duration")
+    if duration_prop:
+        try:
+            return event_dt + duration_prop.dt
+        except Exception:
+            pass
+    return event_dt + (timedelta(days=1) if not is_dt else timedelta(hours=1))
 
 def _extract_exdates(component):
     exdates = set()
@@ -155,9 +172,35 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
             r = SESSION.get(url, timeout=10)
             r.raise_for_status()
             cal = Calendar.from_ical(r.content)
+            overrides = {}
+            masters = []
             for component in cal.walk():
                 if component.name != "VEVENT":
                     continue
+                recurrence_id_prop = component.get("recurrence-id")
+                if recurrence_id_prop:
+                    recurrence_id, _ = _normalize_ical_datetime(recurrence_id_prop.dt)
+                    event_dt, is_dt = _normalize_ical_datetime(component.get("dtstart").dt if component.get("dtstart") else None)
+                    if recurrence_id is None or event_dt is None:
+                        continue
+                    end_dt = _get_event_end(component, event_dt, is_dt)
+                    overrides[(str(component.get("uid", "")), recurrence_id)] = {
+                        "uid": str(component.get("uid", "")),
+                        "start": event_dt,
+                        "end": end_dt,
+                        "summary": str(component.get("summary", "(No title)")),
+                        "location": str(component.get("location", "")).strip(),
+                        "is_all_day": not is_dt,
+                        "source_url": url,
+                        "calendar_name": str(component.get("x-wr-calname") or url),
+                        "calendar_color": str(component.get("x-apple-calendar-color") or "#7dd3fc"),
+                        "status": str(component.get("status", "CONFIRMED")),
+                        "recurrence_id": recurrence_id,
+                    }
+                    continue
+                masters.append(component)
+
+            for component in masters:
                 dtstart_prop = component.get("dtstart")
                 if not dtstart_prop:
                     continue
@@ -169,7 +212,10 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
                 event_dt, is_dt = _normalize_ical_datetime(dtstart_raw)
                 if event_dt is None:
                     continue
+                event_end = _get_event_end(component, event_dt, is_dt)
                 exdates = _extract_exdates(component)
+                calendar_name = str(cal.get("x-wr-calname") or url)
+                calendar_color = str(cal.get("x-apple-calendar-color") or "#7dd3fc")
 
                 rrule_value = component.get("rrule")
                 if rrule_value:
@@ -181,21 +227,45 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
                 else:
                     occurrences = [event_dt]
 
+                duration = max(timedelta(minutes=1), event_end - event_dt)
                 for occurrence_dt in occurrences:
                     if occurrence_dt in exdates:
                         continue
                     if occurrence_dt < window_start or occurrence_dt >= window_end:
                         continue
-                    dedupe_key = (uid, occurrence_dt, summary, location)
+                    override = overrides.get((uid, occurrence_dt))
+                    effective_start = override["start"] if override else occurrence_dt
+                    effective_end = override["end"] if override else occurrence_dt + duration
+                    effective_summary = override["summary"] if override else summary
+                    effective_location = override["location"] if override else location
+                    effective_is_all_day = override["is_all_day"] if override else (not is_dt)
+                    effective_status = override["status"] if override else str(component.get("status", "CONFIRMED"))
+                    effective_calendar_name = override["calendar_name"] if override else calendar_name
+                    effective_calendar_color = override["calendar_color"] if override else calendar_color
+                    dedupe_key = (uid, effective_start, effective_summary, effective_location)
                     if dedupe_key in seen:
                         continue
                     seen.add(dedupe_key)
-                    all_events.append((occurrence_dt, summary, is_dt, location))
+                    all_events.append({
+                        "uid": uid,
+                        "start": effective_start,
+                        "end": effective_end,
+                        "summary": effective_summary,
+                        "location": effective_location,
+                        "is_all_day": effective_is_all_day,
+                        "is_ongoing": effective_start <= now < effective_end,
+                        "is_multi_day": effective_end.date() > effective_start.date(),
+                        "source_url": url,
+                        "calendar_name": effective_calendar_name,
+                        "calendar_color": effective_calendar_color,
+                        "status": effective_status,
+                        "recurrence_id": override["recurrence_id"] if override else None,
+                    })
         except Exception as e:
             print(f"iCal fetch parse error {url}: {e}")
             had_errors = True
 
-    all_events.sort(key=lambda x: x[0])
+    all_events.sort(key=lambda x: x["start"])
     return all_events, had_errors
 
 def get_nws_forecast_url(location):
@@ -238,7 +308,10 @@ class BaseWidget:
         self.update_timer = None
         self.last_error = ""
         self.last_updated = None
+        self.last_refresh_started = None
+        self.refresh_failures = 0
         self.ticker_scroll_x = 0
+        self.last_ticker_step_time = None
 
     def get_position(self, win_width, win_height):
         pos_data = self.config["widget_positions"].get(self.widget_name)
@@ -263,7 +336,12 @@ class BaseWidget:
         decorated_text = self._decorate_text(new_text)
 
         if is_ticker:
-            self.text = "   |   ".join(decorated_text.split("\n")).strip()
+            new_ticker_text = "   |   ".join(decorated_text.split("\n")).strip()
+            if self.text != new_ticker_text:
+                self.ticker_scroll_x = 0.0
+                self.last_ticker_step_time = None
+                self.ticker_initialized = False
+            self.text = new_ticker_text
         else:
             self.text = decorated_text
 
@@ -272,10 +350,23 @@ class BaseWidget:
 
     def set_error(self, err, app, prefix):
         self.last_error = err
+        self.refresh_failures += 1
         self.set_text(prefix, app)
 
     def mark_updated(self):
         self.last_updated = datetime.now()
+        self.last_refresh_started = self.last_updated
+        self.last_error = ""
+
+    def begin_refresh(self):
+        self.last_refresh_started = datetime.now()
+
+    def get_diagnostics(self):
+        return {
+            "last_updated": self.last_updated,
+            "last_error": self.last_error,
+            "refresh_failures": self.refresh_failures,
+        }
 
     def update(self, app):
         self._update_text()
@@ -498,15 +589,19 @@ class ICalWidget(BaseWidget):
                     self.set_error("fetch", app, "iCal  Error")
                     return
                 month_events = {}
-                for event_time, summary, is_dt, _location in all_events:
-                    local = event_time.astimezone(display_tz)
+                for event in all_events:
+                    local = event["start"].astimezone(display_tz)
                     if local < month_start or local >= next_month:
                         continue
                     day_key = local.date().isoformat()
                     if day_key not in month_events:
                         month_events[day_key] = []
-                    label = f"{local.strftime('%I:%M %p').lstrip('0')} {summary}" if is_dt else summary
-                    month_events[day_key].append(label.strip())
+                    label = f"{local.strftime('%I:%M %p').lstrip('0')} {event['summary']}" if not event["is_all_day"] else event["summary"]
+                    month_events[day_key].append({
+                        "text": label.strip(),
+                        "color": event.get("calendar_color", "#7dd3fc"),
+                        "ongoing": event.get("is_ongoing", False),
+                    })
 
                 self.month_calendar_data = {
                     "year": month_start.year,
@@ -525,13 +620,14 @@ class ICalWidget(BaseWidget):
                 return
 
             lines = []
-            for event_time, summary, is_dt, _location in all_events[:5]:
-                if is_dt:
-                    local = event_time.astimezone(display_tz)
-                    lines.append(f"{local.strftime('%a %m/%d %I:%M %p')}: {summary}")
+            for event in all_events[:5]:
+                local = event["start"].astimezone(display_tz)
+                prefix = "LIVE " if event.get("is_ongoing") else ""
+                if not event["is_all_day"]:
+                    lines.append(f"{prefix}{local.strftime('%a %m/%d %I:%M %p')}: {event['summary']}")
                 else:
-                    local = event_time.astimezone(display_tz)
-                    lines.append(f"{local.strftime('%a %m/%d')}: {summary}")
+                    span = " (multi-day)" if event.get("is_multi_day") else ""
+                    lines.append(f"{prefix}{local.strftime('%a %m/%d')}: {event['summary']}{span}")
 
             self.mark_updated()
             self.set_text("\n".join(lines) or "No upcoming events.", app)
@@ -581,14 +677,14 @@ class CommuteWidget(BaseWidget):
             cutoff = now_utc + timedelta(hours=lookahead_hours)
 
             commute_event = None
-            for event_time, summary, is_dt, location in all_events:
-                if not is_dt:
+            for event in all_events:
+                if event["is_all_day"]:
                     continue
-                if not location:
+                if not event["location"]:
                     continue
-                if event_time > cutoff:
+                if event["start"] > cutoff:
                     continue
-                commute_event = (event_time, summary, location)
+                commute_event = event
                 break
 
             if not commute_event and had_errors:
@@ -598,7 +694,9 @@ class CommuteWidget(BaseWidget):
                 self.set_text("Commute\nNo upcoming events with a location.", app)
                 return
 
-            event_utc, summary, location = commute_event
+            event_utc = commute_event["start"]
+            summary = commute_event["summary"]
+            location = commute_event["location"]
             now_local = now_utc.astimezone(display_tz)
             start_local = event_utc.astimezone(display_tz)
             leave_local = start_local - timedelta(minutes=(commute_minutes + prep_minutes))
@@ -656,16 +754,18 @@ class DailyAgendaWidget(BaseWidget):
             cutoff = now + timedelta(days=days_ahead)
             items = []
 
-            for event_time, summary, is_dt, location in all_events:
-                if event_time > cutoff:
+            for event in all_events:
+                if event["start"] > cutoff:
                     continue
-                local = event_time.astimezone(display_tz)
-                if is_dt:
-                    line = f"{local.strftime('%a %m/%d %I:%M %p')}  {summary}"
+                local = event["start"].astimezone(display_tz)
+                ongoing = "LIVE  " if event.get("is_ongoing") else ""
+                if not event["is_all_day"]:
+                    line = f"{ongoing}{local.strftime('%a %m/%d %I:%M %p')}  {event['summary']}"
                 else:
-                    line = f"{local.strftime('%a %m/%d')}  {summary}"
-                if location:
-                    line += f" @ {location}"
+                    span = "  multi-day" if event.get("is_multi_day") else ""
+                    line = f"{ongoing}{local.strftime('%a %m/%d')}  {event['summary']}{span}"
+                if event["location"]:
+                    line += f" @ {event['location']}"
                 items.append(line)
                 if len(items) >= max_events:
                     break
@@ -1589,7 +1689,9 @@ class WidgetManager:
         self.start_updates(self.app)
 
     def draw_all(self, painter, app):
-        for widget_name in list(self.config.get("widget_positions", {}).keys()):
+        for widget_name in app.get_sorted_widget_names():
+            if not app.widget_is_visible(widget_name):
+                continue
             w = self.widgets.get(widget_name)
             if w:
                 w.draw(painter, app)

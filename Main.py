@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import subprocess
 import tempfile
 import time
 from datetime import datetime, date
@@ -9,14 +10,24 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QSlider, QColorDialog,
     QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
-    QInputDialog, QFileDialog
+    QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
-from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal
+from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal, QUrl
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import cv2
 import pytz
 import certifi
+try:
+    from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
+except ImportError:
+    QMediaPlayer = None
+    QAudioOutput = None
+    QVideoSink = None
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from widget_manager import WidgetManager, WIDGET_CLASSES
 import web_server
 import calendar
@@ -94,6 +105,163 @@ def format_widget_display_name(widget_name):
             return f"{WIDGET_DISPLAY_NAMES.get(base, base.replace('_', ' ').title())} {maybe_index}"
     return widget_name.replace("_", " ").title()
 
+DEFAULT_LAYOUT_PAGES = ["default", "morning", "evening", "work", "photo-frame"]
+
+
+def default_visibility_rules():
+    return {
+        "enabled": False,
+        "start_time": "",
+        "end_time": "",
+        "days": [],
+        "background_modes": [],
+    }
+
+
+def default_layout_meta():
+    return {
+        "width": 0.18,
+        "height": 0.08,
+        "z": 0,
+        "locked": False,
+        "page": "default",
+        "group": "",
+        "visibility_rules": default_visibility_rules(),
+    }
+
+
+class BaseMediaBackend:
+    backend_name = "none"
+
+    def start(self):
+        return True
+
+    def stop(self):
+        pass
+
+    def is_open(self):
+        return False
+
+    def get_frame(self):
+        return None
+
+    def get_pixmap(self):
+        return QPixmap()
+
+    def get_fps(self):
+        return 0.0
+
+    def get_volume(self):
+        return 0
+
+    def set_volume(self, value):
+        pass
+
+
+class OpenCvMediaBackend(BaseMediaBackend):
+    backend_name = "opencv"
+
+    def __init__(self, source, source_kind="video"):
+        self.source = source
+        self.source_kind = source_kind
+        self.cap = None
+        self.fps = 0.0
+
+    def start(self):
+        self.cap = cv2.VideoCapture(self.source)
+        if not self.cap or not self.cap.isOpened():
+            self.cap = None
+            return False
+        try:
+            detected_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        except Exception:
+            detected_fps = 0.0
+        if detected_fps <= 1 or detected_fps > 240:
+            detected_fps = 0.0
+        self.fps = detected_fps
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        return True
+
+    def stop(self):
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+        self.cap = None
+
+    def is_open(self):
+        return self.cap is not None and self.cap.isOpened()
+
+    def get_frame(self):
+        if not self.is_open():
+            return None
+        ret, frame = self.cap.read()
+        if not ret:
+            return None
+        return frame
+
+    def get_fps(self):
+        return self.fps
+
+
+class QtVideoMediaBackend(BaseMediaBackend):
+    backend_name = "qt"
+
+    def __init__(self, source, volume=0):
+        self.source = source
+        self.volume = int(volume or 0)
+        self.player = None
+        self.audio = None
+        self.video_sink = None
+        self.latest_pixmap = QPixmap()
+
+    def start(self):
+        if not (QMediaPlayer and QVideoSink):
+            return False
+        self.player = QMediaPlayer()
+        self.audio = QAudioOutput() if QAudioOutput else None
+        if self.audio is not None:
+            self.audio.setVolume(max(0.0, min(1.0, self.volume / 100.0)))
+            self.player.setAudioOutput(self.audio)
+        self.video_sink = QVideoSink()
+        self.video_sink.videoFrameChanged.connect(self._on_frame)
+        self.player.setVideoSink(self.video_sink)
+        self.player.setSource(QUrl.fromLocalFile(self.source))
+        self.player.setLoops(QMediaPlayer.Loops.Infinite)
+        self.player.play()
+        return True
+
+    def _on_frame(self, frame):
+        if not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        self.latest_pixmap = QPixmap.fromImage(image)
+
+    def stop(self):
+        if self.player is not None:
+            self.player.stop()
+        self.player = None
+        self.video_sink = None
+        self.audio = None
+        self.latest_pixmap = QPixmap()
+
+    def is_open(self):
+        return self.player is not None
+
+    def get_pixmap(self):
+        return self.latest_pixmap
+
+    def get_volume(self):
+        return self.volume
+
+    def set_volume(self, value):
+        self.volume = int(max(0, min(100, value)))
+        if self.audio is not None:
+            self.audio.setVolume(self.volume / 100.0)
+
 class VideoLabel(QOpenGLWidget):
     def __init__(self, main_app, parent=None):
         super().__init__(parent)
@@ -115,8 +283,7 @@ class VideoLabel(QOpenGLWidget):
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
             painter.fillRect(self.rect(), background_color)
         else:
-            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap(self.rect(), scaled)
+            self.main_app.draw_background_pixmap(painter, self.rect(), self._pixmap)
             
             # Draw background overlay
             opacity = self.main_app.config.get("background_opacity", 0.0)
@@ -145,8 +312,7 @@ class GpuBackgroundWidget(QOpenGLWidget):
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
             painter.fillRect(self.rect(), background_color)
         else:
-            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap(self.rect(), scaled)
+            self.main_app.draw_background_pixmap(painter, self.rect(), self._pixmap)
             opacity = self.main_app.config.get("background_opacity", 0.0)
             if opacity > 0:
                 painter.fillRect(self.rect(), QColor(0, 0, 0, int(opacity * 255)))
@@ -172,8 +338,7 @@ class CpuVideoLabel(QLabel):
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
             painter.fillRect(self.rect(), background_color)
         else:
-            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap(self.rect(), scaled)
+            self.main_app.draw_background_pixmap(painter, self.rect(), self._pixmap)
             opacity = self.main_app.config.get("background_opacity", 0.0)
             if opacity > 0:
                 painter.fillRect(self.rect(), QColor(0, 0, 0, int(opacity * 255)))
@@ -282,6 +447,18 @@ class OnboardingDialog(QDialog):
         self.feed_combo.setCurrentText("1 Hour")
         form.addRow("Feed Refresh:", self.feed_combo)
 
+        self.mirror_type_combo = QComboBox()
+        self.mirror_type_combo.addItems(["Bathroom", "Hallway", "Bedroom", "Office"])
+        form.addRow("Mirror Type:", self.mirror_type_combo)
+
+        self.distance_combo = QComboBox()
+        self.distance_combo.addItems(["Close", "Medium", "Far"])
+        form.addRow("Viewing Distance:", self.distance_combo)
+
+        self.room_combo = QComboBox()
+        self.room_combo.addItems(["Bedroom", "Kitchen", "Living Room", "Office", "Entryway"])
+        form.addRow("Room:", self.room_combo)
+
         self.template_combo = QComboBox()
         if self.parent and hasattr(self.parent, "get_available_template_names"):
             self.template_combo.addItems(self.parent.get_available_template_names())
@@ -313,6 +490,9 @@ class OnboardingDialog(QDialog):
             "2 Hours": 7200000,
         }
         cfg["feed_refresh_interval_ms"] = feed_map.get(self.feed_combo.currentText(), 3600000)
+        distance_scale = {"Close": 1.0, "Medium": 1.15, "Far": 1.3}
+        cfg["text_scale_multiplier"] = distance_scale.get(self.distance_combo.currentText(), 1.0)
+        cfg["active_page"] = "photo-frame" if self.room_combo.currentText() == "Living Room" else "default"
         self.parent.apply_template(self.template_combo.currentText())
 
 class SettingsDialog(QDialog):
@@ -437,6 +617,31 @@ class SettingsDialog(QDialog):
         self.rotation_combo.setCurrentIndex(current_rot)
         self.rotation_combo.currentIndexChanged.connect(self.live_update_background_rotation)
         cam_layout.addRow("Background Rotation:", self.rotation_combo)
+
+        self.fit_mode_combo = QComboBox()
+        self.fit_mode_combo.addItems(["fill", "fit"])
+        self.fit_mode_combo.setCurrentText(self.config.get("background_fit_mode", "fill"))
+        self.fit_mode_combo.currentTextChanged.connect(self.live_update_fit_mode)
+        cam_layout.addRow("Fit Mode:", self.fit_mode_combo)
+
+        self.blur_spin = QSpinBox()
+        self.blur_spin.setRange(0, 31)
+        self.blur_spin.setValue(int(self.config.get("background_blur", 0)))
+        self.blur_spin.valueChanged.connect(self.live_update_blur)
+        cam_layout.addRow("Blur Amount:", self.blur_spin)
+
+        self.brightness_spin = QDoubleSpinBox()
+        self.brightness_spin.setRange(0.2, 2.0)
+        self.brightness_spin.setSingleStep(0.1)
+        self.brightness_spin.setValue(float(self.config.get("background_brightness", 1.0)))
+        self.brightness_spin.valueChanged.connect(self.live_update_brightness)
+        cam_layout.addRow("Brightness:", self.brightness_spin)
+
+        self.volume_spin = QSpinBox()
+        self.volume_spin.setRange(0, 100)
+        self.volume_spin.setValue(int(self.config.get("background_volume", 0)))
+        self.volume_spin.valueChanged.connect(self.live_update_background_volume)
+        cam_layout.addRow("Background Volume:", self.volume_spin)
         
         layout.addWidget(cam_group)
         
@@ -476,10 +681,22 @@ class SettingsDialog(QDialog):
         self.low_power_check.stateChanged.connect(self.live_update_low_power)
         sys_layout.addRow("", self.low_power_check)
 
+        self.auto_relaunch_check = QCheckBox("Auto Relaunch on Crash")
+        self.auto_relaunch_check.setChecked(self.config.get("auto_relaunch_on_crash", False))
+        self.auto_relaunch_check.stateChanged.connect(self.live_update_auto_relaunch)
+        sys_layout.addRow("", self.auto_relaunch_check)
+
         self.snap_check = QCheckBox("Snap Widgets to Grid (Edit Mode)")
         self.snap_check.setChecked(self.config.get("snap_to_grid", True))
         self.snap_check.stateChanged.connect(self.live_update_snap_to_grid)
         sys_layout.addRow("", self.snap_check)
+
+        self.active_page_combo = QComboBox()
+        self.active_page_combo.setEditable(True)
+        self.active_page_combo.addItems(self.parent.get_layout_pages())
+        self.active_page_combo.setCurrentText(self.config.get("active_page", "default"))
+        self.active_page_combo.currentTextChanged.connect(self.live_update_active_page)
+        sys_layout.addRow("Active Page:", self.active_page_combo)
 
         layout.addWidget(sys_group)
 
@@ -690,6 +907,21 @@ class SettingsDialog(QDialog):
         self.config["video_rotation"] = int(index) % 4
         self.parent.central_widget.update()
 
+    def live_update_fit_mode(self, text):
+        self.config["background_fit_mode"] = text
+        self.parent.central_widget.update()
+
+    def live_update_blur(self, value):
+        self.config["background_blur"] = int(value)
+
+    def live_update_brightness(self, value):
+        self.config["background_brightness"] = float(value)
+
+    def live_update_background_volume(self, value):
+        self.config["background_volume"] = int(value)
+        if self.parent.media_backend is not None:
+            self.parent.media_backend.set_volume(int(value))
+
     def live_update_fullscreen(self, state):
         is_fullscreen = self.fullscreen_check.isChecked()
         self.config["fullscreen"] = is_fullscreen
@@ -771,13 +1003,31 @@ class SettingsDialog(QDialog):
         self.config["low_power_mode"] = self.low_power_check.isChecked()
         self.parent.apply_performance_settings()
 
+    def live_update_auto_relaunch(self, state):
+        self.config["auto_relaunch_on_crash"] = self.auto_relaunch_check.isChecked()
+
     def live_update_snap_to_grid(self, state):
         self.config["snap_to_grid"] = self.snap_check.isChecked()
+
+    def live_update_active_page(self, text):
+        page = (text or "default").strip() or "default"
+        self.config["active_page"] = page
+        if page not in self.config.get("layout_pages", []):
+            self.config.setdefault("layout_pages", []).append(page)
+        self.parent.central_widget.update()
 
     def _profiles_dir(self):
         return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "profiles")
 
+    def flush_pending_settings(self):
+        try:
+            self.save_current_widget_ui_to_config()
+        except Exception as e:
+            print(f"flush_pending_settings error: {e}")
+        self.parent.migrate_config_schema()
+
     def save_profile(self):
+        self.flush_pending_settings()
         name = (self.profile_name_input.text() or "default").strip()
         safe = "".join(ch for ch in name if ch.isalnum() or ch in ("-", "_")).strip() or "default"
         os.makedirs(self._profiles_dir(), exist_ok=True)
@@ -785,7 +1035,7 @@ class SettingsDialog(QDialog):
         self.config["active_profile_name"] = safe
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=2)
+                json.dump(self.parent.config, f, indent=2)
             QMessageBox.information(self, "Profile Saved", f"Saved profile: {safe}")
         except Exception as e:
             QMessageBox.warning(self, "Profile Error", f"Could not save profile:\n{e}")
@@ -798,12 +1048,18 @@ class SettingsDialog(QDialog):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
+            self.parent.config.clear()
             self.parent.config.update(loaded)
+            self.parent.migrate_config_schema()
+            self.config = self.parent.config
             self.parent.widget_manager.config = self.parent.config
             self.parent.widget_manager.load_widgets()
             self.parent.apply_performance_settings()
             self.parent.restart_camera()
             self.parent.central_widget.update()
+            self.profile_name_input.setText(self.parent.config.get("active_profile_name", os.path.splitext(os.path.basename(path))[0]))
+            self.refresh_widget_list()
+            self.refresh_diagnostics()
             QMessageBox.information(self, "Profile Loaded", f"Loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.warning(self, "Profile Error", f"Could not load profile:\n{e}")
@@ -814,14 +1070,36 @@ class SettingsDialog(QDialog):
         fps = self.config.get("camera_fps", 30)
         low = self.config.get("low_power_mode", False)
         mode = self.config.get("background_mode", "Camera")
+        source_fps = getattr(self.parent, "source_fps", 0.0)
+        cpu_line = f"CPU: {psutil.cpu_percent()}%" if psutil else "CPU: unavailable"
+        mem_line = f"Memory: {psutil.virtual_memory().percent}%" if psutil else "Memory: unavailable"
+        widget_lines = []
+        for name in self.parent.get_sorted_widget_names():
+            widget = self.parent.widget_manager.widgets.get(name)
+            layout = self.parent.get_widget_layout(name)
+            last_updated = getattr(widget, "last_updated", None)
+            last_error = getattr(widget, "last_error", "") if widget else ""
+            failure_count = getattr(widget, "refresh_failures", 0) if widget else 0
+            refresh_text = last_updated.strftime("%H:%M:%S") if last_updated else "never"
+            visible = "yes" if self.parent.widget_is_visible(name) else "no"
+            widget_lines.append(
+                f"{name}: page={layout.get('page')} z={layout.get('z')} visible={visible} locked={layout.get('locked')} last_refresh={refresh_text} failures={failure_count} error={last_error or 'none'}"
+            )
         lines = [
             f"Time: {now_str}",
             f"Widgets Loaded: {widget_count}",
             f"Background Mode: {mode}",
             f"Render FPS: {fps}",
+            f"Source FPS: {source_fps:.1f}",
+            cpu_line,
+            mem_line,
             f"Low Power Mode: {'ON' if low else 'OFF'}",
-            "Render Path: CPU",
+            f"Render Path: {self.parent.media_backend_name.upper()}",
+            f"Active Page: {self.config.get('active_page', 'default')}",
             f"Web Management: {'ON' if self.config.get('web_server_enabled') else 'OFF'}",
+            "",
+            "Per-widget diagnostics:",
+            *widget_lines,
         ]
         self.diag_label.setText("\n".join(lines))
 
@@ -873,6 +1151,7 @@ class SettingsDialog(QDialog):
         self.widget_search.setPlaceholderText("Search widget types...")
         self.widget_search.textChanged.connect(self.filter_widget_types)
         controls_layout.addWidget(self.widget_search)
+        self.filter_widget_types("")
 
         # Templates Group
         template_group = QGroupBox("Templates")
@@ -936,9 +1215,11 @@ class SettingsDialog(QDialog):
 
         current = self.widget_list.currentItem().data(Qt.ItemDataRole.UserRole) if self.widget_list.currentItem() else None
         self.widget_list.clear()
-        for name in sorted(self.config.get("widget_positions", {})):
+        for name in self.parent.get_sorted_widget_names():
             status = self.parent.get_widget_status(name)
-            display = f"{format_widget_display_name(name)}  [{status}]"
+            layout = self.parent.get_widget_layout(name)
+            lock_text = " locked" if layout.get("locked") else ""
+            display = f"{format_widget_display_name(name)}  [{status}]  ({layout.get('page', 'default')}, z{layout.get('z', 0)}{lock_text})"
             item = QListWidgetItem(display)
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.widget_list.addItem(item)
@@ -949,7 +1230,7 @@ class SettingsDialog(QDialog):
              self.widget_list.setCurrentRow(0)
 
     def add_widget(self):
-        widget_type = self.widget_combo.currentText()
+        widget_type = self.widget_combo.currentData(Qt.ItemDataRole.UserRole) or self.widget_combo.currentText()
         widget_name = self.parent.add_widget_by_type(widget_type)
         if not widget_name:
             return
@@ -964,9 +1245,13 @@ class SettingsDialog(QDialog):
         text = (text or "").strip().lower()
         visible_widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
         if text:
-            visible_widget_types = [w for w in visible_widget_types if text in w.lower()]
+            visible_widget_types = [
+                w for w in visible_widget_types
+                if text in w.lower() or text in WIDGET_DISPLAY_NAMES.get(w, w.replace("_", " ").title()).lower()
+            ]
         self.widget_combo.clear()
-        self.widget_combo.addItems(visible_widget_types)
+        for widget_type in visible_widget_types:
+            self.widget_combo.addItem(WIDGET_DISPLAY_NAMES.get(widget_type, widget_type.replace("_", " ").title()), widget_type)
 
     def apply_selected_template(self):
         self.parent.apply_template(self.template_combo.currentText())
@@ -1135,6 +1420,63 @@ class SettingsDialog(QDialog):
         font_slider.setValue(int(settings.get("font_scale", 1.0) * 100))
         font_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
         add_row("Widget Font Scale:", font_slider)
+
+        layout_cfg = self.parent.get_widget_layout(new_widget_name)
+
+        anchor_combo = QComboBox(); anchor_combo.setObjectName("layout_anchor_combo")
+        anchor_combo.addItems(["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"])
+        anchor_combo.setCurrentText(layout_cfg.get("anchor", "nw"))
+        anchor_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Anchor:", anchor_combo)
+
+        z_spin = QSpinBox(); z_spin.setObjectName("layout_z_spin")
+        z_spin.setRange(-50, 200); z_spin.setValue(int(layout_cfg.get("z", 0)))
+        z_spin.valueChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Layer:", z_spin)
+
+        lock_check = QCheckBox("Lock widget")
+        lock_check.setObjectName("layout_locked_check")
+        lock_check.setChecked(bool(layout_cfg.get("locked", False)))
+        lock_check.stateChanged.connect(self.save_current_widget_ui_to_config)
+        self.widget_settings_layout.addWidget(lock_check)
+
+        page_combo = QComboBox(); page_combo.setObjectName("layout_page_combo")
+        page_combo.addItems(self.parent.get_layout_pages())
+        if layout_cfg.get("page", "default") not in [page_combo.itemText(i) for i in range(page_combo.count())]:
+            page_combo.addItem(layout_cfg.get("page", "default"))
+        page_combo.setEditable(True)
+        page_combo.setCurrentText(layout_cfg.get("page", "default"))
+        page_combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Page:", page_combo)
+
+        group_entry = QLineEdit(); group_entry.setObjectName("layout_group_entry")
+        group_entry.setText(layout_cfg.get("group", ""))
+        group_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Group:", group_entry)
+
+        vis_enabled = QCheckBox("Enable conditional visibility")
+        vis_enabled.setObjectName("visibility_enabled_check")
+        vis_enabled.setChecked(bool(layout_cfg.get("visibility_rules", {}).get("enabled", False)))
+        vis_enabled.stateChanged.connect(self.save_current_widget_ui_to_config)
+        self.widget_settings_layout.addWidget(vis_enabled)
+
+        start_entry = QLineEdit(); start_entry.setObjectName("visibility_start_entry")
+        start_entry.setPlaceholderText("HH:MM")
+        start_entry.setText(layout_cfg.get("visibility_rules", {}).get("start_time", ""))
+        start_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Visible From:", start_entry)
+
+        end_entry = QLineEdit(); end_entry.setObjectName("visibility_end_entry")
+        end_entry.setPlaceholderText("HH:MM")
+        end_entry.setText(layout_cfg.get("visibility_rules", {}).get("end_time", ""))
+        end_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Visible To:", end_entry)
+
+        days_entry = QLineEdit(); days_entry.setObjectName("visibility_days_entry")
+        days_entry.setPlaceholderText("Mon,Tue,Wed")
+        days_entry.setText(", ".join(layout_cfg.get("visibility_rules", {}).get("days", [])))
+        days_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Days:", days_entry)
 
         if widget_type == "time":
             combo = QComboBox(); combo.setObjectName("time_format_combo")
@@ -1531,11 +1873,42 @@ class SettingsDialog(QDialog):
             
         settings = self.config["widget_settings"][widget_name]
         widget_type = widget_name.split("_")[0]
+        layout = self.parent.get_widget_layout(widget_name)
 
         # Common settings
         slider = self.widget_settings_area.findChild(QSlider, "font_size_slider")
         if slider:
              settings["font_scale"] = slider.value() / 100.0
+        anchor_combo = self.widget_settings_area.findChild(QComboBox, "layout_anchor_combo")
+        if anchor_combo:
+            layout["anchor"] = anchor_combo.currentText()
+        z_spin = self.widget_settings_area.findChild(QSpinBox, "layout_z_spin")
+        if z_spin:
+            layout["z"] = int(z_spin.value())
+        lock_check = self.widget_settings_area.findChild(QCheckBox, "layout_locked_check")
+        if lock_check:
+            layout["locked"] = lock_check.isChecked()
+        page_combo = self.widget_settings_area.findChild(QComboBox, "layout_page_combo")
+        if page_combo:
+            layout["page"] = (page_combo.currentText() or "default").strip() or "default"
+            if layout["page"] not in self.config.get("layout_pages", []):
+                self.config.setdefault("layout_pages", []).append(layout["page"])
+        group_entry = self.widget_settings_area.findChild(QLineEdit, "layout_group_entry")
+        if group_entry:
+            layout["group"] = group_entry.text().strip()
+        rules = layout.setdefault("visibility_rules", default_visibility_rules())
+        vis_enabled = self.widget_settings_area.findChild(QCheckBox, "visibility_enabled_check")
+        if vis_enabled:
+            rules["enabled"] = vis_enabled.isChecked()
+        start_entry = self.widget_settings_area.findChild(QLineEdit, "visibility_start_entry")
+        if start_entry:
+            rules["start_time"] = start_entry.text().strip()
+        end_entry = self.widget_settings_area.findChild(QLineEdit, "visibility_end_entry")
+        if end_entry:
+            rules["end_time"] = end_entry.text().strip()
+        days_entry = self.widget_settings_area.findChild(QLineEdit, "visibility_days_entry")
+        if days_entry:
+            rules["days"] = [part.strip() for part in days_entry.text().split(",") if part.strip()]
 
         if widget_type == "time":
             combo = self.widget_settings_area.findChild(QComboBox, "time_format_combo")
@@ -1776,6 +2149,8 @@ class MagicMirrorApp(QMainWindow):
         self.preview_image_data = None
         self.preview_image_mutex = QMutex()
         self.source_fps = 0.0
+        self.media_backend = None
+        self.media_backend_name = "none"
         self.remote_config_update_requested.connect(self.apply_remote_config, Qt.ConnectionType.QueuedConnection)
         self.load_config()
 
@@ -1791,6 +2166,7 @@ class MagicMirrorApp(QMainWindow):
         
         # Ticker timer
         self.ticker_timer = QTimer(self)
+        self.ticker_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.ticker_timer.timeout.connect(self.update_tickers)
         self.ticker_timer.start(30)
 
@@ -1819,13 +2195,31 @@ class MagicMirrorApp(QMainWindow):
         mode = self.config.get("background_mode", "Camera")
         if mode == "None": return False
         if mode == "Image": return self.static_image is not None
-        if mode in ["Camera", "Video", "YouTube"]: return hasattr(self, "cap") and self.cap is not None and self.cap.isOpened()
+        if mode in ["Camera", "Video", "YouTube"]:
+            return self.media_backend is not None and self.media_backend.is_open()
         return False
 
     def invalidate_text_overlay(self):
         overlay = getattr(getattr(self, "central_widget", None), "overlay_widget", None)
         if overlay is not None and hasattr(overlay, "invalidate_cache"):
             overlay.invalidate_cache()
+
+    def draw_background_pixmap(self, painter, target_rect, pixmap):
+        fit_mode = self.config.get("background_fit_mode", "fill")
+        if fit_mode == "fit":
+            scaled = pixmap.scaled(target_rect.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            x = target_rect.x() + (target_rect.width() - scaled.width()) // 2
+            y = target_rect.y() + (target_rect.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+            return
+        scaled = pixmap.scaled(target_rect.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        crop_x = float(self.config.get("background_crop_x", 0.5) or 0.5)
+        crop_y = float(self.config.get("background_crop_y", 0.5) or 0.5)
+        max_x = max(0, scaled.width() - target_rect.width())
+        max_y = max(0, scaled.height() - target_rect.height())
+        src_x = int(max_x * max(0.0, min(1.0, crop_x)))
+        src_y = int(max_y * max(0.0, min(1.0, crop_y)))
+        painter.drawPixmap(target_rect, scaled, QRect(src_x, src_y, target_rect.width(), target_rect.height()))
 
     def draw_widget_layer(self, painter):
         self.draw_all_widgets(painter)
@@ -1998,7 +2392,7 @@ class MagicMirrorApp(QMainWindow):
         while f"{widget_type}_{i}" in self.config["widget_positions"]:
             i += 1
         widget_name = f"{widget_type}_{i}"
-        self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center"}
+        self.config["widget_positions"][widget_name] = {"x": 0.5, "y": 0.5, "anchor": "center", **default_layout_meta()}
         self.config["widget_settings"][widget_name] = self.get_default_widget_settings(widget_type)
         self.widget_manager.load_widgets()
         self.central_widget.update()
@@ -2007,6 +2401,8 @@ class MagicMirrorApp(QMainWindow):
 
     def remove_widget_by_name(self, widget_name, confirm=True):
         if widget_name not in self.config.get("widget_positions", {}):
+            return False
+        if self.get_widget_layout(widget_name).get("locked"):
             return False
         if confirm:
             reply = QMessageBox.question(
@@ -2196,6 +2592,13 @@ class MagicMirrorApp(QMainWindow):
             "background_mode": "Camera",
             "background_file": "",
             "youtube_quality": "Best Available",
+            "background_fit_mode": "fill",
+            "background_crop_x": 0.5,
+            "background_crop_y": 0.5,
+            "background_blur": 0,
+            "background_brightness": 1.0,
+            "background_volume": 0,
+            "auto_relaunch_on_crash": False,
             "video_rotation": 0,
             "mirror_video": False,
             "fullscreen": True,
@@ -2203,6 +2606,8 @@ class MagicMirrorApp(QMainWindow):
             "feed_refresh_interval_ms": 3600000,
             "widget_positions": {},
             "widget_settings": {},
+            "layout_pages": list(DEFAULT_LAYOUT_PAGES),
+            "active_page": "default",
             "text_color": [255, 255, 255],
             "text_shadow_color": [0, 0, 0],
             "background_color": [0, 0, 0],
@@ -2240,7 +2645,99 @@ class MagicMirrorApp(QMainWindow):
             self.config["grid_size"] = 0.01
         self.config["prefer_gpu_acceleration"] = False
         self.config["sharp_text_mode"] = False
+        self.migrate_config_schema()
         self.save_config()
+
+    def migrate_config_schema(self):
+        self.config.setdefault("layout_pages", list(DEFAULT_LAYOUT_PAGES))
+        if not self.config.get("active_page"):
+            self.config["active_page"] = "default"
+        positions = self.config.setdefault("widget_positions", {})
+        for name, pos in list(positions.items()):
+            meta = default_layout_meta()
+            for key, value in meta.items():
+                if key == "visibility_rules":
+                    current_rules = pos.get("visibility_rules", {})
+                    merged_rules = default_visibility_rules()
+                    if isinstance(current_rules, dict):
+                        merged_rules.update(current_rules)
+                    pos["visibility_rules"] = merged_rules
+                else:
+                    pos.setdefault(key, value)
+            if pos.get("page") not in self.config["layout_pages"]:
+                self.config["layout_pages"].append(pos.get("page") or "default")
+
+    def get_widget_layout(self, widget_name):
+        positions = self.config.setdefault("widget_positions", {})
+        layout = positions.setdefault(widget_name, {"x": 0.5, "y": 0.5, "anchor": "center"})
+        meta = default_layout_meta()
+        for key, value in meta.items():
+            if key == "visibility_rules":
+                merged = default_visibility_rules()
+                current_rules = layout.get("visibility_rules", {})
+                if isinstance(current_rules, dict):
+                    merged.update(current_rules)
+                layout["visibility_rules"] = merged
+            else:
+                layout.setdefault(key, value)
+        return layout
+
+    def get_layout_pages(self):
+        pages = []
+        for page in self.config.get("layout_pages", []):
+            if page and page not in pages:
+                pages.append(page)
+        for name in self.config.get("widget_positions", {}):
+            page = self.get_widget_layout(name).get("page", "default")
+            if page and page not in pages:
+                pages.append(page)
+        if "default" not in pages:
+            pages.insert(0, "default")
+        self.config["layout_pages"] = pages
+        return pages
+
+    def get_sorted_widget_names(self):
+        names = list(self.config.get("widget_positions", {}).keys())
+        names.sort(key=lambda name: (int(self.get_widget_layout(name).get("z", 0)), name))
+        return names
+
+    def widget_is_visible(self, widget_name, now=None):
+        layout = self.get_widget_layout(widget_name)
+        active_page = self.config.get("active_page", "default")
+        if layout.get("page", "default") != active_page:
+            return False
+        rules = layout.get("visibility_rules", {})
+        if not rules.get("enabled"):
+            return True
+        if now is None:
+            now = datetime.now()
+        days = rules.get("days") or []
+        if days:
+            day_name = now.strftime("%a").lower()
+            normalized = {str(day).strip().lower()[:3] for day in days if str(day).strip()}
+            if day_name not in normalized:
+                return False
+        bg_modes = rules.get("background_modes") or []
+        if bg_modes and self.config.get("background_mode") not in bg_modes:
+            return False
+        start_time = (rules.get("start_time") or "").strip()
+        end_time = (rules.get("end_time") or "").strip()
+        if start_time and end_time:
+            try:
+                current_minutes = now.hour * 60 + now.minute
+                start_hours, start_minutes = [int(part) for part in start_time.split(":", 1)]
+                end_hours, end_minutes = [int(part) for part in end_time.split(":", 1)]
+                start_total = start_hours * 60 + start_minutes
+                end_total = end_hours * 60 + end_minutes
+                if start_total <= end_total:
+                    if not (start_total <= current_minutes <= end_total):
+                        return False
+                else:
+                    if end_total < current_minutes < start_total:
+                        return False
+            except Exception:
+                pass
+        return True
 
     def save_config(self):
         with QMutexLocker(self.config_mutex):
@@ -2275,9 +2772,10 @@ class MagicMirrorApp(QMainWindow):
         mode = self.config.get("background_mode", "Camera")
         had_error = False
         self.source_fps = 0.0
-        
-        if hasattr(self, "cap") and self.cap and self.cap.isOpened():
-            self.cap.release()
+        if self.media_backend is not None:
+            self.media_backend.stop()
+        self.media_backend = None
+        self.media_backend_name = "none"
         self.cap = None
         self.static_image = None
 
@@ -2291,22 +2789,40 @@ class MagicMirrorApp(QMainWindow):
 
         if mode == "Camera":
             index = self.config.get("camera_index", 0)
-            self.cap = cv2.VideoCapture(index)
-            if not self.cap.isOpened():
+            backend = OpenCvMediaBackend(index, "camera")
+            if not backend.start():
                 self.show_error(f"Could not open Camera {index}")
                 had_error = True
             else:
+                self.media_backend = backend
+                self.cap = backend.cap
+                self.media_backend_name = backend.backend_name
+                self.source_fps = backend.get_fps()
                 self.configure_capture()
         
         elif mode == "Video":
             path = self.config.get("background_file", "")
             if os.path.exists(path):
-                self.cap = cv2.VideoCapture(path)
-                if not self.cap.isOpened():
-                    self.show_error(f"Could not open video: {path}")
-                    had_error = True
+                backend = None
+                if QMediaPlayer and QVideoSink:
+                    backend = QtVideoMediaBackend(path, self.config.get("background_volume", 0))
+                    if not backend.start():
+                        backend = None
+                if backend is None:
+                    backend = OpenCvMediaBackend(path, "video")
+                    if not backend.start():
+                        self.show_error(f"Could not open video: {path}")
+                        had_error = True
+                    else:
+                        self.cap = backend.cap
+                if not had_error:
+                    self.media_backend = backend
+                    self.media_backend_name = backend.backend_name
+                    self.source_fps = backend.get_fps()
+                    if isinstance(backend, OpenCvMediaBackend):
+                        self.configure_capture()
                 else:
-                    self.configure_capture()
+                    pass
             else:
                 self.show_error(f"Video file not found: {path}")
                 had_error = True
@@ -2336,13 +2852,15 @@ class MagicMirrorApp(QMainWindow):
                         info = ydl.extract_info(url, download=False)
                         stream_urls = self.get_preferred_youtube_stream_urls(info)
                         for video_url in stream_urls:
-                            self.cap = cv2.VideoCapture(video_url)
-                            if self.cap.isOpened():
+                            backend = OpenCvMediaBackend(video_url, "youtube")
+                            if backend.start():
+                                self.media_backend = backend
+                                self.cap = backend.cap
+                                self.media_backend_name = backend.backend_name
+                                self.source_fps = backend.get_fps()
                                 self.configure_capture()
                                 break
-                            self.cap.release()
-                            self.cap = None
-                        if not self.cap or not self.cap.isOpened():
+                        if not self.media_backend or not self.media_backend.is_open():
                             self.show_error("Could not open YouTube stream")
                             had_error = True
                 except ImportError:
@@ -2418,27 +2936,36 @@ class MagicMirrorApp(QMainWindow):
                 frame = self.static_image.copy()
         
         elif mode in ["Camera", "Video", "YouTube"]:
-            if self.cap and self.cap.isOpened():
+            if self.media_backend and self.media_backend.is_open():
+                if self.media_backend_name == "qt":
+                    pixmap = self.media_backend.get_pixmap()
+                    if not pixmap.isNull():
+                        self.central_widget.set_pixmap(pixmap)
+                    else:
+                        self.central_widget.update()
+                    return
                 if mode == "YouTube" and self.source_fps > self.get_target_render_fps():
                     extra_grabs = min(4, int(self.source_fps // max(1, self.get_target_render_fps())))
                     for _ in range(extra_grabs):
-                        if not self.cap.grab():
+                        if not self.cap or not self.cap.grab():
                             break
-                ret, frame = self.cap.read()
-                if not ret:
+                frame = self.media_backend.get_frame()
+                if frame is None:
                     if mode in ["Video", "YouTube"]:
                         # Loop video
-                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = self.cap.read()
+                        if self.cap:
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        frame = self.media_backend.get_frame()
                         
                         # If still no frame (e.g. YouTube stream ended and seek failed), try re-opening
-                        if not ret and mode == "YouTube":
-                             self.cap.release()
+                        if frame is None and mode == "YouTube":
+                             if self.cap:
+                                 self.cap.release()
                              self.setup_camera()
-                             if self.cap and self.cap.isOpened():
-                                 ret, frame = self.cap.read()
+                             if self.media_backend and self.media_backend.is_open():
+                                 frame = self.media_backend.get_frame()
                 
-                if not ret or frame is None:
+                if frame is None:
                     # Failed to read
                     self.central_widget.update()
                     return
@@ -2453,6 +2980,15 @@ class MagicMirrorApp(QMainWindow):
             rot = self.config.get("video_rotation", 0)
             if rot != 0:
                 frame = cv2.rotate(frame, [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE][rot - 1])
+            brightness = float(self.config.get("background_brightness", 1.0) or 1.0)
+            if abs(brightness - 1.0) > 0.01:
+                frame = cv2.convertScaleAbs(frame, alpha=max(0.1, brightness), beta=0)
+            blur = int(self.config.get("background_blur", 0) or 0)
+            if blur > 0:
+                kernel = max(1, blur)
+                if kernel % 2 == 0:
+                    kernel += 1
+                frame = cv2.GaussianBlur(frame, (kernel, kernel), 0)
 
             h, w, ch = frame.shape
             q_img = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, ch * w, QImage.Format.Format_RGB888)
@@ -2463,11 +2999,17 @@ class MagicMirrorApp(QMainWindow):
 
     def update_tickers(self):
         needs_update = False
+        now_monotonic = time.perf_counter()
         with QMutexLocker(self.config_mutex):
             for widget_name, widget in self.widget_manager.widgets.items():
                 settings = self.config.get("widget_settings", {}).get(widget_name, {})
                 if settings.get("style") == "Ticker":
-                    widget.ticker_scroll_x -= max(1, int(settings.get("ticker_speed", 2)))
+                    speed_setting = max(1, int(settings.get("ticker_speed", 2)))
+                    last_step = getattr(widget, "last_ticker_step_time", None)
+                    delta_s = min(0.1, max(0.0, now_monotonic - last_step)) if last_step is not None else 0.03
+                    widget.last_ticker_step_time = now_monotonic
+                    pixels_per_second = 45.0 + speed_setting * 18.0
+                    widget.ticker_scroll_x -= pixels_per_second * delta_s
                     needs_update = True
         
         if needs_update:
@@ -2491,19 +3033,28 @@ class MagicMirrorApp(QMainWindow):
                         y = int(guide["value"])
                         painter.drawLine(0, y, self.central_widget.width(), y)
                 painter.setPen(QColor(0, 255, 0, 200))
-                for name in self.config["widget_positions"]:
+                for name in self.get_sorted_widget_names():
                     bbox = self.get_widget_bbox(name)
                     if bbox:
                         painter.drawRect(bbox)
-                        btn_size = 20
-                        btn_rect = QRect(bbox.right() - btn_size + 1, bbox.top(), btn_size, btn_size)
-                        self.widget_delete_hitboxes[name] = btn_rect
-                        painter.setBrush(QColor(220, 40, 40, 220))
+                        layout = self.get_widget_layout(name)
                         painter.setPen(QColor(255, 255, 255))
-                        painter.drawRect(btn_rect)
-                        painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
+                        painter.drawText(bbox.adjusted(4, 4, -4, -4), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"{layout.get('page', 'default')}  z{layout.get('z', 0)}")
+                        if layout.get("locked"):
+                            lock_rect = QRect(bbox.left(), bbox.top(), 22, 20)
+                            painter.setBrush(QColor(60, 120, 220, 220))
+                            painter.drawRect(lock_rect)
+                            painter.drawText(lock_rect, Qt.AlignmentFlag.AlignCenter, "L")
+                        else:
+                            btn_size = 20
+                            btn_rect = QRect(bbox.right() - btn_size + 1, bbox.top(), btn_size, btn_size)
+                            self.widget_delete_hitboxes[name] = btn_rect
+                            painter.setBrush(QColor(220, 40, 40, 220))
+                            painter.setPen(QColor(255, 255, 255))
+                            painter.drawRect(btn_rect)
+                            painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
 
-                        if self.is_edit_resizable_widget(name):
+                        if self.is_edit_resizable_widget(name) and not layout.get("locked"):
                             handle_size = 16
                             handle_rect = QRect(bbox.right() - handle_size + 1, bbox.bottom() - handle_size + 1, handle_size, handle_size)
                             self.widget_resize_hitboxes[name] = handle_rect
@@ -2521,8 +3072,34 @@ class MagicMirrorApp(QMainWindow):
                 painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
     def is_edit_resizable_widget(self, widget_name):
-        settings = self.config.get("widget_settings", {}).get(widget_name, {})
-        return widget_name.split("_")[0] == "ical" and settings.get("style", "Agenda") == "Month Calendar"
+        return widget_name in self.config.get("widget_positions", {})
+
+    def get_widget_resize_value(self, widget_name):
+        settings = self.config.setdefault("widget_settings", {}).setdefault(widget_name, {})
+        widget_type = widget_name.split("_")[0]
+        if widget_type == "photomemories":
+            try:
+                return float(settings.get("image_scale", 0.35))
+            except (TypeError, ValueError):
+                return 0.35
+        try:
+            return float(settings.get("font_scale", 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def set_widget_resize_value(self, widget_name, value):
+        settings = self.config.setdefault("widget_settings", {}).setdefault(widget_name, {})
+        widget_type = widget_name.split("_")[0]
+        if widget_type == "photomemories":
+            settings["image_scale"] = max(0.1, min(1.0, float(value)))
+            widget = self.widget_manager.widgets.get(widget_name)
+            if widget and hasattr(widget, "_update_text"):
+                try:
+                    widget._update_text()
+                except Exception as e:
+                    print(f"Photo widget resize update error: {e}")
+            return
+        settings["font_scale"] = max(0.5, min(3.0, float(value)))
 
     @staticmethod
     def _get_top_left_for_anchor(anchor, anchor_point, width, height):
@@ -2540,6 +3117,8 @@ class MagicMirrorApp(QMainWindow):
     def get_ical_month_layout(self, widget_name, calendar_data=None):
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         font_scale = float(settings.get("font_scale", 1.0))
+        layout_cfg = self.get_widget_layout(widget_name)
+        font_scale *= max(0.5, float(layout_cfg.get("width", 0.18)) / 0.18)
         scale_multiplier = self.config.get("text_scale_multiplier", 1.0)
 
         title_font = QFont(self.config.get("font_family", "Helvetica"))
@@ -2653,7 +3232,7 @@ class MagicMirrorApp(QMainWindow):
                 text_height = max_h
                 text_width = int(text_width * ratio)
 
-            pos = self.config["widget_positions"][widget_name]
+            pos = self.get_widget_layout(widget_name)
             anchor_x = int(pos["x"] * self.central_widget.width())
             anchor_y = int(pos["y"] * self.central_widget.height())
             anchor = pos.get("anchor", "nw")
@@ -2666,7 +3245,7 @@ class MagicMirrorApp(QMainWindow):
                 layout = self.get_ical_month_layout(widget_name, getattr(widget, "month_calendar_data", None))
                 text_width = layout["outer_w"]
                 text_height = layout["outer_h"]
-                pos = self.config["widget_positions"][widget_name]
+                pos = self.get_widget_layout(widget_name)
                 anchor_x = int(pos["x"] * self.central_widget.width())
                 anchor_y = int(pos["y"] * self.central_widget.height())
                 anchor = pos.get("anchor", "nw")
@@ -2678,7 +3257,9 @@ class MagicMirrorApp(QMainWindow):
         widget_settings = self.config.get("widget_settings", {}).get(widget_name, {})
         widget_scale = widget_settings.get("font_scale", 1.0)
         
-        final_scale = widget.params["scale"] * scale_multiplier * widget_scale
+        layout_cfg = self.get_widget_layout(widget_name)
+        size_scale = max(0.5, float(layout_cfg.get("width", 0.18)) / 0.18)
+        final_scale = widget.params["scale"] * scale_multiplier * widget_scale * size_scale
         font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_scale * 10)
         font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
@@ -2697,7 +3278,7 @@ class MagicMirrorApp(QMainWindow):
             text_width = max(metrics.horizontalAdvance(line) for line in lines) if lines else 0
             text_height = sum(metrics.height() for _ in lines) + (len(lines) - 1) * 5
 
-        pos = self.config["widget_positions"][widget_name]
+        pos = self.get_widget_layout(widget_name)
         anchor_x = int(pos["x"] * self.central_widget.width())
         anchor_y = int(pos["y"] * self.central_widget.height())
         anchor = pos.get("anchor", "nw")
@@ -2714,7 +3295,9 @@ class MagicMirrorApp(QMainWindow):
         
         # Apply per-widget font scale
         widget_scale = settings.get("font_scale", 1.0)
-        final_font_scale = font_scale * widget_scale
+        layout_cfg = self.get_widget_layout(widget_name) if widget_name else default_layout_meta()
+        size_scale = max(0.5, float(layout_cfg.get("width", 0.18)) / 0.18)
+        final_font_scale = font_scale * widget_scale * size_scale
 
         font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_font_scale * 10)
         font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
@@ -2753,11 +3336,11 @@ class MagicMirrorApp(QMainWindow):
             c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
             if not use_sharp_text:
                 painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-                painter.drawText(QPoint(int(x) + 2, int(baseline_y) + 2), text)
+                painter.drawText(QPointF(float(x) + 2.0, float(baseline_y) + 2.0), text)
             
             c_text = self.config.get("text_color", [255, 255, 255])
             painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
-            painter.drawText(QPoint(int(x), int(baseline_y)), text)
+            painter.drawText(QPointF(float(x), float(baseline_y)), text)
             
             # Draw the text again if it's scrolling off the screen to create a seamless loop
             gap = 50
@@ -2765,9 +3348,9 @@ class MagicMirrorApp(QMainWindow):
                 x2 = x + text_width + gap
                 if not use_sharp_text:
                     painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-                    painter.drawText(QPoint(int(x2) + 2, int(baseline_y) + 2), text)
+                    painter.drawText(QPointF(float(x2) + 2.0, float(baseline_y) + 2.0), text)
                 painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
-                painter.drawText(QPoint(int(x2), int(baseline_y)), text)
+                painter.drawText(QPointF(float(x2), float(baseline_y)), text)
                 
                 # Reset scroll logic for infinite loop
                 if x < -text_width:
@@ -2819,7 +3402,7 @@ class MagicMirrorApp(QMainWindow):
 
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         try:
-            scale = float(settings.get("image_scale", 0.35))
+            scale = float(self.get_widget_layout(widget_name).get("width", settings.get("image_scale", 0.35)))
         except (TypeError, ValueError):
             scale = 0.35
         scale = max(0.1, min(1.0, scale))
@@ -2843,7 +3426,7 @@ class MagicMirrorApp(QMainWindow):
         painter.drawPixmap(rect, scaled)
 
     def draw_ical_month_widget(self, painter, widget_name, calendar_data):
-        pos = self.config["widget_positions"].get(widget_name, {"x": 0.5, "y": 0.5, "anchor": "nw"})
+        pos = self.get_widget_layout(widget_name)
         anchor_x = int(pos["x"] * self.central_widget.width())
         anchor_y = int(pos["y"] * self.central_widget.height())
         anchor = pos.get("anchor", "nw")
@@ -2934,12 +3517,23 @@ class MagicMirrorApp(QMainWindow):
 
                 max_event_chars = max(8, int((cell_w - 12) / max(6, body_metrics.averageCharWidth())))
                 event_y = cell_rect.y() + 22
-                for event_text in day_events:
+                for event_item in day_events:
+                    if isinstance(event_item, dict):
+                        event_text = event_item.get("text", "")
+                        event_color_hex = event_item.get("color", "#7dd3fc")
+                        ongoing = event_item.get("ongoing", False)
+                    else:
+                        event_text = str(event_item)
+                        event_color_hex = "#7dd3fc"
+                        ongoing = False
                     trimmed = event_text if len(event_text) <= max_event_chars else event_text[:max_event_chars - 1] + "…"
                     event_rect = QRect(cell_rect.x() + 6, event_y, cell_w - 12, body_metrics.height())
+                    color = QColor(event_color_hex)
+                    if not color.isValid():
+                        color = text_color
                     painter.setPen(shadow_color)
                     painter.drawText(event_rect.translated(1, 1), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, trimmed)
-                    painter.setPen(text_color)
+                    painter.setPen(color if ongoing else text_color)
                     painter.drawText(event_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, trimmed)
                     event_y += body_metrics.height() + 2
             current_row_y += cell_h
@@ -2952,14 +3546,14 @@ class MagicMirrorApp(QMainWindow):
                 return
             for name, rect in list(self.widget_resize_hitboxes.items()):
                 if rect.contains(click_point):
-                    settings = self.config.setdefault("widget_settings", {}).setdefault(name, {})
                     self.drag_data = {
                         "widget": name,
                         "start_pos": event.position().toPoint(),
                         "start_widget_pos": self.config["widget_positions"][name].copy(),
                         "mode": "resize",
-                        "start_scale": float(settings.get("font_scale", 1.0)),
+                        "start_scale": self.get_widget_resize_value(name),
                     }
+                    self.push_undo_snapshot()
                     return
             for name, rect in list(self.widget_delete_hitboxes.items()):
                 if rect.contains(click_point):
@@ -2969,11 +3563,13 @@ class MagicMirrorApp(QMainWindow):
                     self.central_widget.update()
                     return
             with QMutexLocker(self.config_mutex):
-                for name in reversed(list(self.config["widget_positions"])):
+                for name in reversed(self.get_sorted_widget_names()):
                     bbox = self.get_widget_bbox(name)
                     if bbox and bbox.contains(click_point):
+                        if self.get_widget_layout(name).get("locked"):
+                            return
                         # Switch anchor to 'nw' to keep top-left corner in spot
-                        pos_config = self.config["widget_positions"][name]
+                        pos_config = self.get_widget_layout(name)
                         if pos_config.get("anchor") != "nw":
                             new_x = bbox.x() / self.central_widget.width()
                             new_y = bbox.y() / self.central_widget.height()
@@ -2994,16 +3590,19 @@ class MagicMirrorApp(QMainWindow):
 
     def add_widget_from_edit_overlay(self):
         widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
-        widget_type, ok = QInputDialog.getItem(
+        display_map = {WIDGET_DISPLAY_NAMES.get(w, w.replace("_", " ").title()): w for w in widget_types}
+        display_names = list(display_map.keys())
+        selected_display, ok = QInputDialog.getItem(
             self,
             "Add Widget",
             "Widget Type:",
-            widget_types,
+            display_names,
             0,
             False
         )
-        if not ok or not widget_type:
+        if not ok or not selected_display:
             return
+        widget_type = display_map[selected_display]
         widget_name = self.add_widget_by_type(widget_type)
         self.open_settings_dialog(widget_name=widget_name, widget_tab=True)
 
@@ -3018,9 +3617,8 @@ class MagicMirrorApp(QMainWindow):
                 with QMutexLocker(self.config_mutex):
                     if self.drag_data.get("mode") == "resize":
                         scale_delta = max(delta.x() / max(1, self.central_widget.width()), delta.y() / max(1, self.central_widget.height())) * 2.0
-                        new_scale = max(0.5, min(3.0, float(self.drag_data.get("start_scale") or 1.0) + scale_delta))
-                        settings = self.config.setdefault("widget_settings", {}).setdefault(self.drag_data["widget"], {})
-                        settings["font_scale"] = new_scale
+                        new_scale = float(self.drag_data.get("start_scale") or 1.0) + scale_delta
+                        self.set_widget_resize_value(self.drag_data["widget"], new_scale)
                     else:
                         new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
                         new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
@@ -3064,7 +3662,7 @@ class MagicMirrorApp(QMainWindow):
     def open_settings_dialog(self, widget_name=None, widget_tab=False):
         dialog = SettingsDialog(self)
         if widget_tab or self.sender() == self.edit_button:
-            dialog.tabs.setCurrentIndex(1)
+            dialog.tabs.setCurrentIndex(2)
         if widget_name:
             dialog.refresh_widget_list()
             for i in range(dialog.widget_list.count()):
@@ -3127,11 +3725,11 @@ class MagicMirrorApp(QMainWindow):
         self.remote_config_update_requested.emit()
 
     def apply_remote_config(self):
-        with QMutexLocker(self.config_mutex):
-            self.set_fullscreen(self.config.get("fullscreen", True))
-            self.restart_camera()
-            self.widget_manager.config = self.config
-            self.widget_manager.load_widgets()
+        self.migrate_config_schema()
+        self.set_fullscreen(self.config.get("fullscreen", True))
+        self.restart_camera()
+        self.widget_manager.config = self.config
+        self.widget_manager.load_widgets()
         self.central_widget.update()
 
     def start_web_server(self):
@@ -3160,10 +3758,32 @@ class MagicMirrorApp(QMainWindow):
             self.timer.stop()
         if hasattr(self, "cap") and self.cap and self.cap.isOpened():
             self.cap.release()
+        if getattr(self, "media_backend", None) is not None:
+            self.media_backend.stop()
 
         super().closeEvent(event)
 
 if __name__ == "__main__":
+    current_window = {"instance": None}
+
+    def relaunch_on_crash(exc_type, exc_value, exc_traceback):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        window_ref = current_window.get("instance")
+        if window_ref and window_ref.config.get("auto_relaunch_on_crash", False):
+            try:
+                subprocess.Popen([sys.executable, *sys.argv], cwd=os.getcwd())
+            except Exception as e:
+                print(f"Auto relaunch failed: {e}")
+        os._exit(1)
+
+    def thread_relaunch_on_crash(args):
+        relaunch_on_crash(args.exc_type, args.exc_value, args.exc_traceback)
+
+    sys.excepthook = relaunch_on_crash
+    if hasattr(__import__("threading"), "excepthook"):
+        import threading
+        threading.excepthook = thread_relaunch_on_crash
+
     app = QApplication(sys.argv)
     default_font = app.font()
     default_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
@@ -3171,5 +3791,6 @@ if __name__ == "__main__":
     app.setFont(default_font)
     app.setWindowIcon(QIcon("resources/icon.png"))
     window = MagicMirrorApp()
+    current_window["instance"] = window
     window.show()
     sys.exit(app.exec())
