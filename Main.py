@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, date
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
@@ -13,11 +13,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import cv2
 import pytz
 import certifi
 from widget_manager import WidgetManager, WIDGET_CLASSES
 import web_server
+import calendar
 
 # ensure requests and feedparser see a CA bundle in a bundled app
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
@@ -56,18 +58,58 @@ THEME_PRESETS = {
     },
 }
 
-class VideoLabel(QLabel):
+WIDGET_DISPLAY_NAMES = {
+    "time": "Time",
+    "date": "Date",
+    "calendar": "Calendar",
+    "ical": "iCal",
+    "rss": "RSS Feed",
+    "weatherforecast": "Weather Forecast",
+    "worldclock": "World Clock",
+    "sports": "Sports",
+    "stock": "Stocks",
+    "history": "History",
+    "countdown": "Countdown",
+    "quotes": "Quotes",
+    "system": "System",
+    "ip": "IP Address",
+    "moon": "Moon",
+    "commute": "Commute",
+    "dailyagenda": "Daily Agenda",
+    "photomemories": "Photo Memories",
+    "flightboard": "Flight Board",
+    "energyprice": "Energy Price",
+    "package": "Package Tracker",
+    "sunrise": "Sunrise",
+    "sunrisesunset": "Sunrise / Sunset",
+    "astronomy": "Astronomy",
+}
+
+def format_widget_display_name(widget_name):
+    if not widget_name:
+        return ""
+    if "_" in widget_name:
+        base, maybe_index = widget_name.rsplit("_", 1)
+        if maybe_index.isdigit():
+            return f"{WIDGET_DISPLAY_NAMES.get(base, base.replace('_', ' ').title())} {maybe_index}"
+    return widget_name.replace("_", " ").title()
+
+class VideoLabel(QOpenGLWidget):
     def __init__(self, main_app, parent=None):
         super().__init__(parent)
         self.main_app = main_app
         self._pixmap = QPixmap()
+        self.setAutoFillBackground(False)
 
     def set_pixmap(self, pixmap):
         self._pixmap = pixmap
         self.update()
 
-    def paintEvent(self, event):
+    def paintGL(self):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         bg = self.main_app.config.get("background_color", [0, 0, 0])
         background_color = QColor(bg[0], bg[1], bg[2])
         if self._pixmap.isNull() or not self.main_app.is_camera_active():
@@ -81,21 +123,136 @@ class VideoLabel(QLabel):
             if opacity > 0:
                 painter.fillRect(self.rect(), QColor(0, 0, 0, int(opacity * 255)))
 
-        self.main_app.draw_all_widgets(painter)
-        if self.main_app.error_message:
-            painter.setPen(QColor(255, 80, 80))
-            font = QFont(self.main_app.config.get("font_family", "Helvetica")); font.setPointSizeF(14)
-            painter.setFont(font)
-            metrics = painter.fontMetrics()
-            lines = self.main_app.error_message.split("\n")
-            w = max(metrics.horizontalAdvance(l) for l in lines) + 20
-            h = sum(metrics.height() for _ in lines) + (len(lines) - 1) * 5 + 20
-            x, y = 20, 20
-            painter.fillRect(QRect(x, y, w, h), QColor(0, 0, 0, 160))
-            painter.setPen(QColor(255, 255, 255))
-            for i, line in enumerate(lines):
-                baseline = y + 20 + i * (metrics.height() + 5) + metrics.ascent()
-                painter.drawText(QPoint(x + 10, baseline), line)
+        self.main_app.draw_widget_layer(painter)
+        painter.end()
+
+class GpuBackgroundWidget(QOpenGLWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        self._pixmap = QPixmap()
+        self.setAutoFillBackground(False)
+
+    def set_pixmap(self, pixmap):
+        self._pixmap = pixmap
+        self.update()
+
+    def paintGL(self):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        bg = self.main_app.config.get("background_color", [0, 0, 0])
+        background_color = QColor(bg[0], bg[1], bg[2])
+        if self._pixmap.isNull() or not self.main_app.is_camera_active():
+            painter.fillRect(self.rect(), background_color)
+        else:
+            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(self.rect(), scaled)
+            opacity = self.main_app.config.get("background_opacity", 0.0)
+            if opacity > 0:
+                painter.fillRect(self.rect(), QColor(0, 0, 0, int(opacity * 255)))
+        painter.end()
+
+class CpuVideoLabel(QLabel):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        self._pixmap = QPixmap()
+
+    def set_pixmap(self, pixmap):
+        self._pixmap = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        bg = self.main_app.config.get("background_color", [0, 0, 0])
+        background_color = QColor(bg[0], bg[1], bg[2])
+        if self._pixmap.isNull() or not self.main_app.is_camera_active():
+            painter.fillRect(self.rect(), background_color)
+        else:
+            scaled = self._pixmap.scaled(self.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(self.rect(), scaled)
+            opacity = self.main_app.config.get("background_opacity", 0.0)
+            if opacity > 0:
+                painter.fillRect(self.rect(), QColor(0, 0, 0, int(opacity * 255)))
+        self.main_app.draw_widget_layer(painter)
+
+class OverlayWidget(QWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        self._overlay_cache = QPixmap()
+        self._cache_dirty = True
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+
+    def invalidate_cache(self):
+        self._cache_dirty = True
+        self.update()
+
+    def resizeEvent(self, event):
+        self._cache_dirty = True
+        super().resizeEvent(event)
+
+    def rebuild_cache(self):
+        if self.width() <= 0 or self.height() <= 0:
+            self._overlay_cache = QPixmap()
+            self._cache_dirty = False
+            return
+        dpr = max(1.0, self.devicePixelRatioF())
+        image = QImage(
+            int(self.width() * dpr),
+            int(self.height() * dpr),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        self.main_app.draw_widget_layer(painter)
+        painter.end()
+
+        self._overlay_cache = QPixmap.fromImage(image)
+        self._cache_dirty = False
+
+    def paintEvent(self, event):
+        if self._cache_dirty:
+            self.rebuild_cache()
+        painter = QPainter(self)
+        if not self._overlay_cache.isNull():
+            painter.drawPixmap(0, 0, self._overlay_cache)
+
+class HybridRenderSurface(QWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        self.background_widget = GpuBackgroundWidget(main_app, self)
+        self.overlay_widget = OverlayWidget(main_app, self)
+        self.interaction_widget = self.overlay_widget
+        self._pixmap = QPixmap()
+        self.setAutoFillBackground(False)
+
+    def resizeEvent(self, event):
+        rect = self.rect()
+        self.background_widget.setGeometry(rect)
+        self.overlay_widget.setGeometry(rect)
+        self.overlay_widget.raise_()
+        super().resizeEvent(event)
+
+    def set_pixmap(self, pixmap):
+        self._pixmap = pixmap
+        self.background_widget.set_pixmap(pixmap)
+        self.overlay_widget.invalidate_cache()
+
+    def update(self):
+        self.overlay_widget.invalidate_cache()
+        self.background_widget.update()
+        super().update()
 
 class OnboardingDialog(QDialog):
     def __init__(self, parent=None):
@@ -176,10 +333,20 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self.general_tab, "General")
         self.setup_general_tab()
 
+        self.appearance_tab = QWidget()
+        self.appearance_layout = QVBoxLayout(self.appearance_tab)
+        self.tabs.addTab(self.appearance_tab, "Appearance")
+        self.setup_appearance_tab()
+
         self.widget_tab = QWidget()
         self.widget_layout = QVBoxLayout(self.widget_tab)
         self.tabs.addTab(self.widget_tab, "Widgets")
         self.setup_widget_tab()
+
+        self.diagnostics_tab = QWidget()
+        self.diagnostics_layout = QVBoxLayout(self.diagnostics_tab)
+        self.tabs.addTab(self.diagnostics_tab, "Diagnostics")
+        self.setup_diagnostics_tab()
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
@@ -247,6 +414,13 @@ class SettingsDialog(QDialog):
         self.file_row_widget.setLayout(file_layout)
         cam_layout.addRow(self.file_row_label, self.file_row_widget)
 
+        self.youtube_quality_combo = QComboBox()
+        self.youtube_quality_combo.addItems(["Best Available", "1080p", "720p", "480p"])
+        self.youtube_quality_combo.setCurrentText(self.config.get("youtube_quality", "Best Available"))
+        self.youtube_quality_combo.currentTextChanged.connect(self.live_update_youtube_quality)
+        self.youtube_quality_label = QLabel("YouTube Quality:")
+        cam_layout.addRow(self.youtube_quality_label, self.youtube_quality_combo)
+
         self.mirror_video_check = QCheckBox("Mirror Video")
         self.mirror_video_check.setChecked(self.config.get("mirror_video", False))
         self.mirror_video_check.stateChanged.connect(self.live_update_mirror_video)
@@ -268,66 +442,6 @@ class SettingsDialog(QDialog):
         
         # Initial UI state update
         self.update_background_ui_state()
-
-        # Appearance Group
-        app_group = QGroupBox("Appearance")
-        app_layout = QFormLayout(app_group)
-
-        self.font_combo = QComboBox()
-        self.font_combo.addItems(QFontDatabase.families())
-        self.font_combo.setCurrentText(self.config.get("font_family", "Helvetica"))
-        self.font_combo.currentTextChanged.connect(self.live_update_font)
-        app_layout.addRow("Font Family:", self.font_combo)
-
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
-        self.opacity_slider.valueChanged.connect(self.live_update_opacity)
-        app_layout.addRow("Background Dimming:", self.opacity_slider)
-
-        self.text_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.text_size_slider.setRange(50, 200)
-        self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
-        self.text_size_slider.valueChanged.connect(self.live_update_text_size)
-        app_layout.addRow("Global Text Size:", self.text_size_slider)
-
-        layout.addWidget(app_group)
-
-        # Themes Group
-        theme_group = QGroupBox("Themes")
-        theme_layout = QFormLayout(theme_group)
-
-        colors_layout = QHBoxLayout()
-        self.text_color_button = QPushButton("Text Color")
-        self.text_color_button.clicked.connect(self.open_text_color_picker)
-        colors_layout.addWidget(self.text_color_button)
-
-        self.shadow_color_button = QPushButton("Shadow Color")
-        self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
-        colors_layout.addWidget(self.shadow_color_button)
-
-        self.background_color_button = QPushButton("Background Color")
-        self.background_color_button.clicked.connect(self.open_background_color_picker)
-        colors_layout.addWidget(self.background_color_button)
-        theme_layout.addRow("Theme Colors:", colors_layout)
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(list(THEME_PRESETS.keys()))
-        self.theme_combo.currentTextChanged.connect(self.live_update_theme_preset)
-        theme_layout.addRow("Theme Preset:", self.theme_combo)
-
-        self.accessibility_combo = QComboBox()
-        self.accessibility_combo.addItems([
-            "Standard",
-            "Large Text",
-            "High Contrast",
-            "Large + High Contrast",
-            "Night Mode",
-            "Matrix Mode"
-        ])
-        self.accessibility_combo.currentTextChanged.connect(self.live_update_accessibility)
-        theme_layout.addRow("Readability Preset:", self.accessibility_combo)
-        layout.addWidget(theme_group)
 
         # System Group
         sys_group = QGroupBox("System")
@@ -383,8 +497,84 @@ class SettingsDialog(QDialog):
         profile_btns.addWidget(self.load_profile_btn)
         profile_layout.addRow("", profile_btns)
         layout.addWidget(profile_group)
+        layout.addStretch()
 
-        # Diagnostics Group
+    def setup_appearance_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        self.appearance_layout.addWidget(scroll)
+
+        app_group = QGroupBox("Appearance")
+        app_layout = QFormLayout(app_group)
+
+        self.font_combo = QComboBox()
+        self.font_combo.addItems(QFontDatabase.families())
+        self.font_combo.setCurrentText(self.config.get("font_family", "Helvetica"))
+        self.font_combo.currentTextChanged.connect(self.live_update_font)
+        app_layout.addRow("Font Family:", self.font_combo)
+
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(int(self.config.get("background_opacity", 0.0) * 100))
+        self.opacity_slider.valueChanged.connect(self.live_update_opacity)
+        app_layout.addRow("Background Dimming:", self.opacity_slider)
+
+        self.text_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.text_size_slider.setRange(50, 200)
+        self.text_size_slider.setValue(int(self.config.get("text_scale_multiplier", 1.0) * 100))
+        self.text_size_slider.valueChanged.connect(self.live_update_text_size)
+        app_layout.addRow("Global Text Size:", self.text_size_slider)
+        layout.addWidget(app_group)
+
+        theme_group = QGroupBox("Themes")
+        theme_layout = QFormLayout(theme_group)
+
+        colors_layout = QHBoxLayout()
+        self.text_color_button = QPushButton("Text Color")
+        self.text_color_button.clicked.connect(self.open_text_color_picker)
+        colors_layout.addWidget(self.text_color_button)
+
+        self.shadow_color_button = QPushButton("Shadow Color")
+        self.shadow_color_button.clicked.connect(self.open_shadow_color_picker)
+        colors_layout.addWidget(self.shadow_color_button)
+
+        self.background_color_button = QPushButton("Background Color")
+        self.background_color_button.clicked.connect(self.open_background_color_picker)
+        colors_layout.addWidget(self.background_color_button)
+        theme_layout.addRow("Theme Colors:", colors_layout)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEME_PRESETS.keys()))
+        self.theme_combo.currentTextChanged.connect(self.live_update_theme_preset)
+        theme_layout.addRow("Theme Preset:", self.theme_combo)
+
+        self.accessibility_combo = QComboBox()
+        self.accessibility_combo.addItems([
+            "Standard",
+            "Large Text",
+            "High Contrast",
+            "Large + High Contrast",
+            "Night Mode",
+            "Matrix Mode"
+        ])
+        self.accessibility_combo.currentTextChanged.connect(self.live_update_accessibility)
+        theme_layout.addRow("Readability Preset:", self.accessibility_combo)
+        layout.addWidget(theme_group)
+        layout.addStretch()
+
+    def setup_diagnostics_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        self.diagnostics_layout.addWidget(scroll)
+
         diag_group = QGroupBox("Diagnostics")
         diag_layout = QVBoxLayout(diag_group)
         self.diag_label = QLabel()
@@ -396,6 +586,14 @@ class SettingsDialog(QDialog):
         layout.addWidget(diag_group)
         self.refresh_diagnostics()
         layout.addStretch()
+
+    def add_ticker_speed_row(self, settings, add_row):
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setObjectName("ticker_speed_slider")
+        slider.setRange(1, 10)
+        slider.setValue(int(settings.get("ticker_speed", 2)))
+        slider.valueChanged.connect(self.save_current_widget_ui_to_config)
+        add_row("Ticker Speed:", slider)
 
     def open_text_color_picker(self):
         c = self.config.get("text_color", [255, 255, 255])
@@ -452,6 +650,8 @@ class SettingsDialog(QDialog):
         self.file_row_label.setVisible(show_file)
         self.file_row_widget.setVisible(show_file)
         self.browse_button.setVisible(mode != "YouTube") # No browse for YouTube
+        self.youtube_quality_label.setVisible(mode == "YouTube")
+        self.youtube_quality_combo.setVisible(mode == "YouTube")
         
         if mode == "YouTube":
             self.background_file_input.setPlaceholderText("Enter YouTube URL")
@@ -477,6 +677,11 @@ class SettingsDialog(QDialog):
         # Only restart if it's a valid path or URL to avoid constant restarting while typing
         if os.path.exists(text) or (self.config.get("background_mode") == "YouTube" and len(text) > 10):
              self.parent.restart_camera()
+
+    def live_update_youtube_quality(self, text):
+        self.config["youtube_quality"] = text
+        if self.config.get("background_mode") == "YouTube" and len(self.config.get("background_file", "")) > 10:
+            self.parent.restart_camera()
 
     def live_update_mirror_video(self, state):
         self.config["mirror_video"] = self.mirror_video_check.isChecked()
@@ -615,6 +820,7 @@ class SettingsDialog(QDialog):
             f"Background Mode: {mode}",
             f"Render FPS: {fps}",
             f"Low Power Mode: {'ON' if low else 'OFF'}",
+            "Render Path: CPU",
             f"Web Management: {'ON' if self.config.get('web_server_enabled') else 'OFF'}",
         ]
         self.diag_label.setText("\n".join(lines))
@@ -732,7 +938,7 @@ class SettingsDialog(QDialog):
         self.widget_list.clear()
         for name in sorted(self.config.get("widget_positions", {})):
             status = self.parent.get_widget_status(name)
-            display = f"{name}  [{status}]"
+            display = f"{format_widget_display_name(name)}  [{status}]"
             item = QListWidgetItem(display)
             item.setData(Qt.ItemDataRole.UserRole, name)
             self.widget_list.addItem(item)
@@ -839,7 +1045,7 @@ class SettingsDialog(QDialog):
             
             # Update UI
             self.widget_settings_area.setProperty("current_widget", new_name)
-            self.settings_title.setText(f"Settings: {new_name}")
+            self.settings_title.setText(f"Settings: {format_widget_display_name(new_name)}")
             self.parent.widget_manager.load_widgets()
             self.refresh_widget_list()
             for i in range(self.widget_list.count()):
@@ -912,7 +1118,7 @@ class SettingsDialog(QDialog):
         self.widget_settings_area.setProperty("current_widget", new_widget_name)
         self.scroll_area.setWidget(new_container)
 
-        self.settings_title.setText(f"Settings: {new_widget_name}")
+        self.settings_title.setText(f"Settings: {format_widget_display_name(new_widget_name)}")
         
         widget_type = new_widget_name.split("_")[0]
         settings = self.config.get("widget_settings", {}).get(new_widget_name, {})
@@ -945,6 +1151,9 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("format", "%A, %B %d, %Y"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Date Format:", combo)
+            help_label = QLabel("Codes: %A=weekday, %a=short weekday, %B=month, %b=short month, %d=day, %m=month #, %Y=year")
+            help_label.setWordWrap(True)
+            self.widget_settings_layout.addWidget(help_label)
             
         elif widget_type == "worldclock":
             combo = QComboBox(); combo.setObjectName("tz_combo")
@@ -976,6 +1185,12 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("timezone", "US/Central"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Timezone:", combo)
+
+            combo = QComboBox(); combo.setObjectName("ical_style_combo")
+            combo.addItems(["Agenda", "Month Calendar"])
+            combo.setCurrentText(settings.get("style", "Agenda"))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Style:", combo)
             
             list_widget = QListWidget(); list_widget.setObjectName("url_list")
             for url in settings.get("urls", []):
@@ -1011,6 +1226,12 @@ class SettingsDialog(QDialog):
             rem_btn = QPushButton("-"); rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
             btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
             self.widget_settings_layout.addLayout(btn_layout)
+
+            combo = QComboBox(); combo.setObjectName("ical_day_event_limit_combo")
+            combo.addItems([str(i) for i in range(1, 6)])
+            combo.setCurrentText(str(settings.get("day_event_limit", 2)))
+            combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+            add_row("Events Per Day:", combo)
 
             entry = QLineEdit(); entry.setObjectName("commute_minutes_entry")
             entry.setText(str(settings.get("commute_minutes", 25)))
@@ -1085,6 +1306,7 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Style:", combo)
+            self.add_ticker_speed_row(settings, add_row)
             
             combo = QComboBox(); combo.setObjectName("article_count_combo")
             combo.addItems([str(i) for i in range(1, 21)])
@@ -1128,6 +1350,7 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Style:", combo)
+            self.add_ticker_speed_row(settings, add_row)
 
         elif widget_type == "stock":
             entry = QLineEdit(); entry.setObjectName("api_key_entry")
@@ -1145,6 +1368,7 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("style", "Normal"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Style:", combo)
+            self.add_ticker_speed_row(settings, add_row)
 
         elif widget_type == "countdown":
             entry = QLineEdit(); entry.setObjectName("countdown_name_entry")
@@ -1332,9 +1556,15 @@ class SettingsDialog(QDialog):
         elif widget_type == "ical":
             combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
             if combo: settings["timezone"] = combo.currentText()
+            combo = self.widget_settings_area.findChild(QComboBox, "ical_style_combo")
+            if combo: settings["style"] = combo.currentText()
             list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
             if list_widget:
                 settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            combo = self.widget_settings_area.findChild(QComboBox, "ical_day_event_limit_combo")
+            if combo:
+                try: settings["day_event_limit"] = int(combo.currentText())
+                except ValueError: pass
         elif widget_type == "commute":
             combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
             if combo: settings["timezone"] = combo.currentText()
@@ -1375,6 +1605,8 @@ class SettingsDialog(QDialog):
                 settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
             combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
             if combo: settings["style"] = combo.currentText()
+            slider = self.widget_settings_area.findChild(QSlider, "ticker_speed_slider")
+            if slider: settings["ticker_speed"] = int(slider.value())
             combo = self.widget_settings_area.findChild(QComboBox, "article_count_combo")
             if combo: settings["article_count"] = int(combo.currentText())
             entry = self.widget_settings_area.findChild(QLineEdit, "max_width_entry")
@@ -1398,6 +1630,8 @@ class SettingsDialog(QDialog):
             if combo: settings["timezone"] = combo.currentText()
             combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
             if combo: settings["style"] = combo.currentText()
+            slider = self.widget_settings_area.findChild(QSlider, "ticker_speed_slider")
+            if slider: settings["ticker_speed"] = int(slider.value())
         elif widget_type == "stock":
             entry = self.widget_settings_area.findChild(QLineEdit, "api_key_entry")
             if entry: settings["api_key"] = entry.text()
@@ -1405,6 +1639,8 @@ class SettingsDialog(QDialog):
             if entry: settings["symbols"] = [s.strip() for s in entry.text().split(",")]
             combo = self.widget_settings_area.findChild(QComboBox, "style_combo")
             if combo: settings["style"] = combo.currentText()
+            slider = self.widget_settings_area.findChild(QSlider, "ticker_speed_slider")
+            if slider: settings["ticker_speed"] = int(slider.value())
         elif widget_type == "countdown":
             entry = self.widget_settings_area.findChild(QLineEdit, "countdown_name_entry")
             if entry: settings["name"] = entry.text()
@@ -1527,8 +1763,9 @@ class MagicMirrorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.edit_mode = False
-        self.drag_data = {"widget": None, "start_pos": None, "start_widget_pos": None}
+        self.drag_data = {"widget": None, "start_pos": None, "start_widget_pos": None, "mode": "move", "start_scale": None}
         self.widget_delete_hitboxes = {}
+        self.widget_resize_hitboxes = {}
         self.add_widget_button_rect = None
         self.undo_stack = []
         self.redo_stack = []
@@ -1538,19 +1775,13 @@ class MagicMirrorApp(QMainWindow):
         self.web_server = None
         self.preview_image_data = None
         self.preview_image_mutex = QMutex()
+        self.source_fps = 0.0
         self.remote_config_update_requested.connect(self.apply_remote_config, Qt.ConnectionType.QueuedConnection)
         self.load_config()
 
         self.setWindowTitle("Magic Mirror")
-        self.central_widget = VideoLabel(self)
-        self.setCentralWidget(self.central_widget)
-        self.central_widget.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.central_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        self.central_widget.setMouseTracking(True)
-        self.central_widget.mousePressEvent = self.central_widget_mouse_press
-        self.central_widget.mouseMoveEvent = self.central_widget_mouse_move
-        self.central_widget.mouseReleaseEvent = self.central_widget_mouse_release
+        self.central_widget = None
+        self.create_render_surface()
 
         self.widget_manager = WidgetManager(self, self.config)
         self.setup_camera()
@@ -1591,9 +1822,146 @@ class MagicMirrorApp(QMainWindow):
         if mode in ["Camera", "Video", "YouTube"]: return hasattr(self, "cap") and self.cap is not None and self.cap.isOpened()
         return False
 
+    def invalidate_text_overlay(self):
+        overlay = getattr(getattr(self, "central_widget", None), "overlay_widget", None)
+        if overlay is not None and hasattr(overlay, "invalidate_cache"):
+            overlay.invalidate_cache()
+
+    def draw_widget_layer(self, painter):
+        self.draw_all_widgets(painter)
+        if self.error_message:
+            painter.setPen(QColor(255, 80, 80))
+            font = QFont(self.config.get("font_family", "Helvetica"))
+            font.setPointSizeF(14)
+            font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+            font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            lines = self.error_message.split("\n")
+            w = max(metrics.horizontalAdvance(l) for l in lines) + 20
+            h = sum(metrics.height() for _ in lines) + (len(lines) - 1) * 5 + 20
+            x, y = 20, 20
+            painter.fillRect(QRect(x, y, w, h), QColor(0, 0, 0, 160))
+            painter.setPen(QColor(255, 255, 255))
+            for i, line in enumerate(lines):
+                baseline = y + 20 + i * (metrics.height() + 5) + metrics.ascent()
+                painter.drawText(QPoint(x + 10, baseline), line)
+
+    def create_render_surface(self):
+        widget_cls = CpuVideoLabel
+        new_widget = widget_cls(self)
+        new_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        interaction_target = getattr(new_widget, "interaction_widget", new_widget)
+        interaction_target.setMouseTracking(True)
+        interaction_target.mousePressEvent = self.central_widget_mouse_press
+        interaction_target.mouseMoveEvent = self.central_widget_mouse_move
+        interaction_target.mouseReleaseEvent = self.central_widget_mouse_release
+        if self.central_widget is not None:
+            new_widget.set_pixmap(self.central_widget._pixmap)
+        self.central_widget = new_widget
+        self.setCentralWidget(self.central_widget)
+        self.refresh_overlay_buttons()
+
+    def recreate_render_surface(self):
+        old_pixmap = QPixmap()
+        if self.central_widget is not None:
+            old_pixmap = self.central_widget._pixmap
+        self.create_render_surface()
+        if not old_pixmap.isNull():
+            self.central_widget.set_pixmap(old_pixmap)
+        self.central_widget.update()
+        self.save_config()
+
+    def get_target_render_fps(self):
+        try:
+            configured_fps = max(1, int(self.config.get("camera_fps", 30)))
+        except (TypeError, ValueError):
+            configured_fps = 30
+        if self.config.get("low_power_mode", False):
+            return min(configured_fps, 15)
+
+        mode = self.config.get("background_mode", "Camera")
+        source_fps = float(getattr(self, "source_fps", 0.0) or 0.0)
+        if mode in ("Video", "YouTube") and source_fps >= 50:
+            return min(60, max(configured_fps, int(round(source_fps))))
+        return configured_fps
+
+    def configure_capture(self):
+        if not self.cap or not self.cap.isOpened():
+            self.source_fps = 0.0
+            return
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        try:
+            detected_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        except Exception:
+            detected_fps = 0.0
+        if detected_fps <= 1 or detected_fps > 240:
+            detected_fps = 0.0
+        self.source_fps = detected_fps
+        if hasattr(self, "timer") and self.timer:
+            self.timer.start(max(1, int(1000 / self.get_target_render_fps())))
+
+    def get_preferred_youtube_stream_urls(self, info):
+        formats = info.get("formats") or []
+        quality_targets = {
+            "480p": 480,
+            "720p": 720,
+            "1080p": 1080,
+        }
+        quality_pref = self.config.get("youtube_quality", "Best Available")
+        target_height = quality_targets.get(quality_pref)
+        candidates = []
+        for fmt in formats:
+            url = fmt.get("url")
+            if not url or fmt.get("vcodec") == "none" or fmt.get("has_drm"):
+                continue
+            protocol = (fmt.get("protocol") or "").lower()
+            ext = (fmt.get("ext") or "").lower()
+            vcodec = (fmt.get("vcodec") or "").lower()
+            height = int(fmt.get("height") or 0)
+            width = int(fmt.get("width") or 0)
+            fps = int(fmt.get("fps") or 0)
+            tbr = float(fmt.get("tbr") or 0.0)
+
+            # OpenCV is generally more reliable with direct MP4/H.264 streams than HLS or DASH manifests.
+            protocol_penalty = 1 if "m3u8" in protocol else 0
+            ext_score = 2 if ext in {"mp4", "m4v", "mov"} else 1 if ext in {"webm", "mkv"} else 0
+            codec_score = 2 if any(token in vcodec for token in ("avc", "h264")) else 1
+            if target_height:
+                height_distance = abs(height - target_height) if height else 9999
+                overshoot_penalty = 1 if height and height > target_height else 0
+            else:
+                height_distance = 0
+                overshoot_penalty = 0
+
+            candidates.append((
+                protocol_penalty,
+                overshoot_penalty,
+                height_distance,
+                -codec_score,
+                -ext_score,
+                -height,
+                -width,
+                -fps,
+                -tbr,
+                url,
+            ))
+
+        candidates.sort()
+        urls = [candidate[-1] for candidate in candidates]
+
+        direct_url = info.get("url")
+        if direct_url and direct_url not in urls:
+            urls.append(direct_url)
+
+        return urls
+
     def get_default_widget_settings(self, widget_type):
         defaults = {
-            "ical": {"urls": [], "timezone": "US/Central"},
+            "ical": {"urls": [], "timezone": "US/Central", "style": "Agenda", "day_event_limit": 2},
             "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
             "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
             "photomemories": {
@@ -1604,11 +1972,11 @@ class MagicMirrorApp(QMainWindow):
                 "max_name_chars": 45,
                 "image_scale": 0.35
             },
-            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5},
+            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5, "ticker_speed": 2},
             "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
             "worldclock": {"timezone": "UTC"},
-            "sports": {"configs": [], "style": "Normal", "timezone": "UTC"},
-            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal"},
+            "sports": {"configs": [], "style": "Normal", "timezone": "UTC", "ticker_speed": 2},
+            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal", "ticker_speed": 2},
             "date": {"format": "%A, %B %d, %Y"},
             "countdown": {"name": "New Event", "datetime": ""},
             "history": {"max_width_chars": 50},
@@ -1644,7 +2012,7 @@ class MagicMirrorApp(QMainWindow):
             reply = QMessageBox.question(
                 self,
                 "Confirm",
-                f"Remove {widget_name}?",
+                f"Remove {format_widget_display_name(widget_name)}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -1784,9 +2152,8 @@ class MagicMirrorApp(QMainWindow):
             self.save_config()
 
     def apply_performance_settings(self):
-        fps = int(self.config.get("camera_fps", 30))
+        fps = self.get_target_render_fps()
         if self.config.get("low_power_mode", False):
-            fps = min(fps, 15)
             self.config["feed_refresh_interval_ms"] = max(3600000, int(self.config.get("feed_refresh_interval_ms", 3600000)))
         interval_ms = max(1, int(1000 / max(1, fps)))
         if hasattr(self, "timer") and self.timer:
@@ -1828,6 +2195,7 @@ class MagicMirrorApp(QMainWindow):
             "camera_index": 0,
             "background_mode": "Camera",
             "background_file": "",
+            "youtube_quality": "Best Available",
             "video_rotation": 0,
             "mirror_video": False,
             "fullscreen": True,
@@ -1844,6 +2212,8 @@ class MagicMirrorApp(QMainWindow):
             "web_server_enabled": False,
             "camera_fps": 30,
             "low_power_mode": False,
+            "prefer_gpu_acceleration": False,
+            "sharp_text_mode": False,
             "snap_to_grid": True,
             "grid_size": 0.01,
             "onboarding_completed": False,
@@ -1868,6 +2238,8 @@ class MagicMirrorApp(QMainWindow):
         # keep snapping fine-grained by default
         if current_grid > 0.01:
             self.config["grid_size"] = 0.01
+        self.config["prefer_gpu_acceleration"] = False
+        self.config["sharp_text_mode"] = False
         self.save_config()
 
     def save_config(self):
@@ -1902,6 +2274,7 @@ class MagicMirrorApp(QMainWindow):
     def setup_camera(self):
         mode = self.config.get("background_mode", "Camera")
         had_error = False
+        self.source_fps = 0.0
         
         if hasattr(self, "cap") and self.cap and self.cap.isOpened():
             self.cap.release()
@@ -1922,6 +2295,8 @@ class MagicMirrorApp(QMainWindow):
             if not self.cap.isOpened():
                 self.show_error(f"Could not open Camera {index}")
                 had_error = True
+            else:
+                self.configure_capture()
         
         elif mode == "Video":
             path = self.config.get("background_file", "")
@@ -1930,6 +2305,8 @@ class MagicMirrorApp(QMainWindow):
                 if not self.cap.isOpened():
                     self.show_error(f"Could not open video: {path}")
                     had_error = True
+                else:
+                    self.configure_capture()
             else:
                 self.show_error(f"Video file not found: {path}")
                 had_error = True
@@ -1950,13 +2327,23 @@ class MagicMirrorApp(QMainWindow):
             if url:
                 try:
                     import yt_dlp
-                    ydl_opts = {'format': 'best'}
+                    ydl_opts = {
+                        "quiet": True,
+                        "no_warnings": True,
+                        "noplaylist": True,
+                    }
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
-                        video_url = info['url']
-                        self.cap = cv2.VideoCapture(video_url)
-                        if not self.cap.isOpened():
-                            self.show_error(f"Could not open YouTube stream")
+                        stream_urls = self.get_preferred_youtube_stream_urls(info)
+                        for video_url in stream_urls:
+                            self.cap = cv2.VideoCapture(video_url)
+                            if self.cap.isOpened():
+                                self.configure_capture()
+                                break
+                            self.cap.release()
+                            self.cap = None
+                        if not self.cap or not self.cap.isOpened():
+                            self.show_error("Could not open YouTube stream")
                             had_error = True
                 except ImportError:
                     self.show_error("yt_dlp not installed. Run: pip install yt_dlp")
@@ -1972,7 +2359,7 @@ class MagicMirrorApp(QMainWindow):
         if not hasattr(self, "timer") or not self.timer.isActive():
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_camera_feed)
-            fps = max(1, int(self.config.get("camera_fps", 30)))
+            fps = self.get_target_render_fps()
             self.timer.start(max(1, int(1000 / fps)))
             
         if not had_error:
@@ -2005,6 +2392,17 @@ class MagicMirrorApp(QMainWindow):
             "background-color: rgba(0,0,0,0.5); color: white; border: 1px solid white; font-size: 18px;"
         )
         self.edit_button.setFixedSize(40, 40)
+        self.refresh_overlay_buttons()
+
+    def refresh_overlay_buttons(self):
+        if not hasattr(self, "settings_button") or not hasattr(self, "edit_button"):
+            return
+        self.settings_button.move(self.width() - self.settings_button.width() - 10, 10)
+        self.edit_button.move(self.width() - self.edit_button.width() - 60, 10)
+        self.settings_button.show()
+        self.edit_button.show()
+        self.settings_button.raise_()
+        self.edit_button.raise_()
 
     def update_camera_feed(self):
         mode = self.config.get("background_mode", "Camera")
@@ -2021,6 +2419,11 @@ class MagicMirrorApp(QMainWindow):
         
         elif mode in ["Camera", "Video", "YouTube"]:
             if self.cap and self.cap.isOpened():
+                if mode == "YouTube" and self.source_fps > self.get_target_render_fps():
+                    extra_grabs = min(4, int(self.source_fps // max(1, self.get_target_render_fps())))
+                    for _ in range(extra_grabs):
+                        if not self.cap.grab():
+                            break
                 ret, frame = self.cap.read()
                 if not ret:
                     if mode in ["Video", "YouTube"]:
@@ -2064,7 +2467,7 @@ class MagicMirrorApp(QMainWindow):
             for widget_name, widget in self.widget_manager.widgets.items():
                 settings = self.config.get("widget_settings", {}).get(widget_name, {})
                 if settings.get("style") == "Ticker":
-                    widget.ticker_scroll_x -= 2  # Scroll speed
+                    widget.ticker_scroll_x -= max(1, int(settings.get("ticker_speed", 2)))
                     needs_update = True
         
         if needs_update:
@@ -2073,6 +2476,7 @@ class MagicMirrorApp(QMainWindow):
     def draw_all_widgets(self, painter):
         with QMutexLocker(self.config_mutex):
             self.widget_delete_hitboxes = {}
+            self.widget_resize_hitboxes = {}
             self.add_widget_button_rect = None
             self.widget_manager.draw_all(painter, self)
             if self.edit_mode:
@@ -2099,6 +2503,15 @@ class MagicMirrorApp(QMainWindow):
                         painter.drawRect(btn_rect)
                         painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
 
+                        if self.is_edit_resizable_widget(name):
+                            handle_size = 16
+                            handle_rect = QRect(bbox.right() - handle_size + 1, bbox.bottom() - handle_size + 1, handle_size, handle_size)
+                            self.widget_resize_hitboxes[name] = handle_rect
+                            painter.setBrush(QColor(40, 120, 220, 220))
+                            painter.setPen(QColor(255, 255, 255))
+                            painter.drawRect(handle_rect)
+                            painter.drawText(handle_rect, Qt.AlignmentFlag.AlignCenter, "↘")
+
                 plus_size = 30
                 plus_rect = QRect(self.central_widget.width() - plus_size - 15, 65, plus_size, plus_size)
                 self.add_widget_button_rect = plus_rect
@@ -2106,6 +2519,10 @@ class MagicMirrorApp(QMainWindow):
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawEllipse(plus_rect)
                 painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
+
+    def is_edit_resizable_widget(self, widget_name):
+        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        return widget_name.split("_")[0] == "ical" and settings.get("style", "Agenda") == "Month Calendar"
 
     @staticmethod
     def _get_top_left_for_anchor(anchor, anchor_point, width, height):
@@ -2119,6 +2536,90 @@ class MagicMirrorApp(QMainWindow):
         elif "n" not in anchor:
             y -= height / 2
         return x, y
+
+    def get_ical_month_layout(self, widget_name, calendar_data=None):
+        settings = self.config.get("widget_settings", {}).get(widget_name, {})
+        font_scale = float(settings.get("font_scale", 1.0))
+        scale_multiplier = self.config.get("text_scale_multiplier", 1.0)
+
+        title_font = QFont(self.config.get("font_family", "Helvetica"))
+        title_font.setPointSizeF(11 * scale_multiplier * font_scale)
+        title_font.setBold(True)
+        title_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        title_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+
+        header_font = QFont(self.config.get("font_family", "Helvetica"))
+        header_font.setPointSizeF(8.5 * scale_multiplier * font_scale)
+        header_font.setBold(True)
+        header_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        header_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+
+        body_font = QFont(self.config.get("font_family", "Helvetica"))
+        body_font.setPointSizeF(7.5 * scale_multiplier * font_scale)
+        body_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        body_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+
+        title_metrics = QFontMetrics(title_font)
+        header_metrics = QFontMetrics(header_font)
+        body_metrics = QFontMetrics(body_font)
+
+        cell_w = max(120, int(self.central_widget.width() * 0.12 * font_scale))
+        min_cell_h = max(90, int(self.central_widget.height() * 0.11 * font_scale))
+        title_h = title_metrics.height() + 12
+        dow_h = header_metrics.height() + 10
+
+        if not calendar_data:
+            return {
+                "cell_w": cell_w,
+                "row_heights": [min_cell_h] * 6,
+                "title_h": title_h,
+                "dow_h": dow_h,
+                "grid_w": cell_w * 7,
+                "grid_h": min_cell_h * 6,
+                "outer_w": cell_w * 7 + 20,
+                "outer_h": title_h + dow_h + min_cell_h * 6 + 20,
+                "title_font": title_font,
+                "header_font": header_font,
+                "body_font": body_font,
+                "title_metrics": title_metrics,
+                "header_metrics": header_metrics,
+                "body_metrics": body_metrics,
+            }
+
+        cal_obj = calendar.Calendar(calendar.SUNDAY)
+        weeks = cal_obj.monthdayscalendar(calendar_data["year"], calendar_data["month"])
+        while len(weeks) < 6:
+            weeks.append([0] * 7)
+        events_by_day = calendar_data.get("events", {})
+        row_heights = []
+        line_h = body_metrics.height() + 2
+        for week in weeks[:6]:
+            week_max_events = 0
+            for day_num in week:
+                if not day_num:
+                    continue
+                day_key = date(calendar_data["year"], calendar_data["month"], day_num).isoformat()
+                week_max_events = max(week_max_events, len(events_by_day.get(day_key, [])))
+            row_heights.append(max(min_cell_h, 28 + week_max_events * line_h + 8))
+
+        grid_w = cell_w * 7
+        grid_h = sum(row_heights)
+        return {
+            "cell_w": cell_w,
+            "row_heights": row_heights,
+            "title_h": title_h,
+            "dow_h": dow_h,
+            "grid_w": grid_w,
+            "grid_h": grid_h,
+            "outer_w": grid_w + 20,
+            "outer_h": title_h + dow_h + grid_h + 20,
+            "title_font": title_font,
+            "header_font": header_font,
+            "body_font": body_font,
+            "title_metrics": title_metrics,
+            "header_metrics": header_metrics,
+            "body_metrics": body_metrics,
+        }
 
     def get_widget_bbox(self, widget_name):
         widget = self.widget_manager.widgets.get(widget_name)
@@ -2159,6 +2660,19 @@ class MagicMirrorApp(QMainWindow):
             x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), text_width, text_height)
             return QRect(int(x0), int(y0), int(text_width) + 2, int(text_height) + 2)
 
+        if widget_type == "ical":
+            settings = self.config.get("widget_settings", {}).get(widget_name, {})
+            if settings.get("style", "Agenda") == "Month Calendar":
+                layout = self.get_ical_month_layout(widget_name, getattr(widget, "month_calendar_data", None))
+                text_width = layout["outer_w"]
+                text_height = layout["outer_h"]
+                pos = self.config["widget_positions"][widget_name]
+                anchor_x = int(pos["x"] * self.central_widget.width())
+                anchor_y = int(pos["y"] * self.central_widget.height())
+                anchor = pos.get("anchor", "nw")
+                x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), text_width, text_height)
+                return QRect(int(x0), int(y0), int(text_width) + 2, int(text_height) + 2)
+
         scale_multiplier = self.config.get("text_scale_multiplier", 1.0)
         # Apply per-widget font scale
         widget_settings = self.config.get("widget_settings", {}).get(widget_name, {})
@@ -2166,6 +2680,8 @@ class MagicMirrorApp(QMainWindow):
         
         final_scale = widget.params["scale"] * scale_multiplier * widget_scale
         font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_scale * 10)
+        font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         metrics = QFontMetrics(font)
         text_content = widget.text if getattr(widget, "text", "") else f"({widget_name})"
         
@@ -2201,8 +2717,11 @@ class MagicMirrorApp(QMainWindow):
         final_font_scale = font_scale * widget_scale
 
         font = QFont(self.config.get("font_family", "Helvetica")); font.setPointSizeF(final_font_scale * 10)
+        font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         painter.setFont(font)
         metrics = painter.fontMetrics()
+        use_sharp_text = self.config.get("sharp_text_mode", False)
 
         if is_ticker:
             # Ticker drawing logic
@@ -2232,8 +2751,9 @@ class MagicMirrorApp(QMainWindow):
             baseline_y = y + metrics.ascent() - metrics.height()/2
             
             c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
-            painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-            painter.drawText(QPoint(int(x) + 2, int(baseline_y) + 2), text)
+            if not use_sharp_text:
+                painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
+                painter.drawText(QPoint(int(x) + 2, int(baseline_y) + 2), text)
             
             c_text = self.config.get("text_color", [255, 255, 255])
             painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
@@ -2243,8 +2763,9 @@ class MagicMirrorApp(QMainWindow):
             gap = 50
             if x + text_width < self.central_widget.width():
                 x2 = x + text_width + gap
-                painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-                painter.drawText(QPoint(int(x2) + 2, int(baseline_y) + 2), text)
+                if not use_sharp_text:
+                    painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
+                    painter.drawText(QPoint(int(x2) + 2, int(baseline_y) + 2), text)
                 painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
                 painter.drawText(QPoint(int(x2), int(baseline_y)), text)
                 
@@ -2283,8 +2804,9 @@ class MagicMirrorApp(QMainWindow):
                     painter.setFont(font)
 
                 c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
-                painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-                painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
+                if not use_sharp_text:
+                    painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
+                    painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
                 
                 c_text = self.config.get("text_color", [255, 255, 255])
                 painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
@@ -2320,16 +2842,130 @@ class MagicMirrorApp(QMainWindow):
         scaled = pixmap.scaled(target_w, target_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         painter.drawPixmap(rect, scaled)
 
+    def draw_ical_month_widget(self, painter, widget_name, calendar_data):
+        pos = self.config["widget_positions"].get(widget_name, {"x": 0.5, "y": 0.5, "anchor": "nw"})
+        anchor_x = int(pos["x"] * self.central_widget.width())
+        anchor_y = int(pos["y"] * self.central_widget.height())
+        anchor = pos.get("anchor", "nw")
+
+        layout = self.get_ical_month_layout(widget_name, calendar_data)
+        cell_w = layout["cell_w"]
+        row_heights = layout["row_heights"]
+        title_h = layout["title_h"]
+        dow_h = layout["dow_h"]
+        outer_w = layout["outer_w"]
+        outer_h = layout["outer_h"]
+        title_font = layout["title_font"]
+        header_font = layout["header_font"]
+        body_font = layout["body_font"]
+        title_metrics = layout["title_metrics"]
+        body_metrics = layout["body_metrics"]
+
+        x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), outer_w, outer_h)
+        panel_rect = QRect(int(x0), int(y0), int(outer_w), int(outer_h))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 120)))
+        painter.drawRoundedRect(panel_rect, 12, 12)
+
+        c_text = self.config.get("text_color", [255, 255, 255])
+        c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
+        text_color = QColor(c_text[0], c_text[1], c_text[2])
+        shadow_color = QColor(c_shadow[0], c_shadow[1], c_shadow[2])
+        grid_color = QColor(255, 255, 255, 45)
+        accent_color = QColor(c_text[0], c_text[1], c_text[2], 90)
+        today_fill = QColor(c_text[0], c_text[1], c_text[2], 35)
+        use_sharp_text = self.config.get("sharp_text_mode", False)
+
+        painter.setFont(title_font)
+        if not use_sharp_text:
+            painter.setPen(shadow_color)
+            painter.drawText(QPoint(int(x0) + 12 + 1, int(y0) + title_metrics.ascent() + 10 + 1), calendar_data.get("month_name", "Calendar"))
+        painter.setPen(text_color)
+        painter.drawText(QPoint(int(x0) + 12, int(y0) + title_metrics.ascent() + 10), calendar_data.get("month_name", "Calendar"))
+
+        grid_x = int(x0) + 10
+        grid_y = int(y0) + 10 + title_h + dow_h
+        dow_y = int(y0) + 10 + title_h
+        weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        painter.setFont(header_font)
+        for idx, name in enumerate(weekdays):
+            header_rect = QRect(grid_x + idx * cell_w, dow_y, cell_w, dow_h)
+            painter.setPen(accent_color)
+            painter.drawText(header_rect.translated(1, 1), Qt.AlignmentFlag.AlignCenter, name)
+            painter.setPen(text_color)
+            painter.drawText(header_rect, Qt.AlignmentFlag.AlignCenter, name)
+
+        cal = calendar.Calendar(calendar.SUNDAY)
+        weeks = cal.monthdayscalendar(calendar_data["year"], calendar_data["month"])
+        while len(weeks) < 6:
+            weeks.append([0] * 7)
+        today = datetime.now().date()
+        events_by_day = calendar_data.get("events", {})
+
+        painter.setFont(body_font)
+        current_row_y = grid_y
+        for row_idx, week in enumerate(weeks[:6]):
+            cell_h = row_heights[row_idx]
+            for col_idx, day_num in enumerate(week):
+                cell_rect = QRect(grid_x + col_idx * cell_w, current_row_y, cell_w, cell_h)
+                if day_num:
+                    cell_date = date(calendar_data["year"], calendar_data["month"], day_num)
+                    if cell_date == today:
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(QBrush(today_fill))
+                        painter.drawRoundedRect(cell_rect.adjusted(2, 2, -2, -2), 8, 8)
+
+                painter.setPen(grid_color)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(cell_rect)
+
+                if not day_num:
+                    continue
+
+                painter.setPen(text_color)
+                day_text_rect = cell_rect.adjusted(6, 4, -4, -4)
+                painter.drawText(day_text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(day_num))
+
+                day_key = date(calendar_data["year"], calendar_data["month"], day_num).isoformat()
+                day_events = events_by_day.get(day_key, [])
+                if not day_events:
+                    continue
+
+                max_event_chars = max(8, int((cell_w - 12) / max(6, body_metrics.averageCharWidth())))
+                event_y = cell_rect.y() + 22
+                for event_text in day_events:
+                    trimmed = event_text if len(event_text) <= max_event_chars else event_text[:max_event_chars - 1] + "…"
+                    event_rect = QRect(cell_rect.x() + 6, event_y, cell_w - 12, body_metrics.height())
+                    painter.setPen(shadow_color)
+                    painter.drawText(event_rect.translated(1, 1), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, trimmed)
+                    painter.setPen(text_color)
+                    painter.drawText(event_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, trimmed)
+                    event_y += body_metrics.height() + 2
+            current_row_y += cell_h
+
     def central_widget_mouse_press(self, event):
         if self.edit_mode and event.button() == Qt.MouseButton.LeftButton:
             click_point = event.position().toPoint()
             if self.add_widget_button_rect and self.add_widget_button_rect.contains(click_point):
                 self.add_widget_from_edit_overlay()
                 return
+            for name, rect in list(self.widget_resize_hitboxes.items()):
+                if rect.contains(click_point):
+                    settings = self.config.setdefault("widget_settings", {}).setdefault(name, {})
+                    self.drag_data = {
+                        "widget": name,
+                        "start_pos": event.position().toPoint(),
+                        "start_widget_pos": self.config["widget_positions"][name].copy(),
+                        "mode": "resize",
+                        "start_scale": float(settings.get("font_scale", 1.0)),
+                    }
+                    return
             for name, rect in list(self.widget_delete_hitboxes.items()):
                 if rect.contains(click_point):
                     self.remove_widget_by_name(name, confirm=True)
                     self.widget_delete_hitboxes = {}
+                    self.widget_resize_hitboxes = {}
                     self.central_widget.update()
                     return
             with QMutexLocker(self.config_mutex):
@@ -2350,6 +2986,8 @@ class MagicMirrorApp(QMainWindow):
                             "widget": name,
                             "start_pos": event.position().toPoint(),
                             "start_widget_pos": self.config["widget_positions"][name].copy(),
+                            "mode": "move",
+                            "start_scale": None,
                         }
                         self.push_undo_snapshot()
                         return
@@ -2378,26 +3016,34 @@ class MagicMirrorApp(QMainWindow):
             # Check if start_widget_pos is available
             if self.drag_data.get("start_widget_pos"):
                 with QMutexLocker(self.config_mutex):
-                    new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
-                    new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
-                    if self.config.get("snap_to_grid", True):
-                        g = float(self.config.get("grid_size", 0.05))
-                        if g > 0:
-                            new_x = round(new_x / g) * g
-                            new_y = round(new_y / g) * g
-                    self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
-                    self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
-                    self.alignment_guides = []
-                    center_tol = 0.02
-                    if abs(new_x - 0.5) <= center_tol:
-                        self.alignment_guides.append({"axis": "x", "value": self.central_widget.width() * 0.5})
-                    if abs(new_y - 0.5) <= center_tol:
-                        self.alignment_guides.append({"axis": "y", "value": self.central_widget.height() * 0.5})
+                    if self.drag_data.get("mode") == "resize":
+                        scale_delta = max(delta.x() / max(1, self.central_widget.width()), delta.y() / max(1, self.central_widget.height())) * 2.0
+                        new_scale = max(0.5, min(3.0, float(self.drag_data.get("start_scale") or 1.0) + scale_delta))
+                        settings = self.config.setdefault("widget_settings", {}).setdefault(self.drag_data["widget"], {})
+                        settings["font_scale"] = new_scale
+                    else:
+                        new_x = self.drag_data["start_widget_pos"]["x"] + delta.x() / self.central_widget.width()
+                        new_y = self.drag_data["start_widget_pos"]["y"] + delta.y() / self.central_widget.height()
+                        if self.config.get("snap_to_grid", True):
+                            g = float(self.config.get("grid_size", 0.05))
+                            if g > 0:
+                                new_x = round(new_x / g) * g
+                                new_y = round(new_y / g) * g
+                        self.config["widget_positions"][self.drag_data["widget"]]["x"] = max(0.0, min(1.0, new_x))
+                        self.config["widget_positions"][self.drag_data["widget"]]["y"] = max(0.0, min(1.0, new_y))
+                        self.alignment_guides = []
+                        center_tol = 0.02
+                        if abs(new_x - 0.5) <= center_tol:
+                            self.alignment_guides.append({"axis": "x", "value": self.central_widget.width() * 0.5})
+                        if abs(new_y - 0.5) <= center_tol:
+                            self.alignment_guides.append({"axis": "y", "value": self.central_widget.height() * 0.5})
                 self.central_widget.update()
 
     def central_widget_mouse_release(self, event):
         if self.edit_mode and self.drag_data["widget"] and event.button() == Qt.MouseButton.LeftButton:
             self.drag_data["widget"] = None
+            self.drag_data["mode"] = "move"
+            self.drag_data["start_scale"] = None
             self.alignment_guides = []
             self.save_config()
 
@@ -2433,22 +3079,24 @@ class MagicMirrorApp(QMainWindow):
         self.edit_button.setChecked(self.edit_mode)
         if not self.edit_mode:
             self.widget_delete_hitboxes = {}
+            self.widget_resize_hitboxes = {}
             self.add_widget_button_rect = None
         self.central_widget.update()
         # Removed the popup message
         # QMessageBox.information(self, "Edit Mode", f"Drag and drop is now {'enabled' if self.edit_mode else 'disabled'}.")
 
     def resizeEvent(self, event):
-        self.settings_button.move(self.width() - self.settings_button.width() - 10, 10)
-        self.edit_button.move(self.width() - self.edit_button.width() - 60, 10)
+        self.refresh_overlay_buttons()
         super().resizeEvent(event)
 
     def show_error(self, message):
         self.error_message = message
+        self.invalidate_text_overlay()
         self.central_widget.update()
 
     def clear_error_message(self):
         self.error_message = ""
+        self.invalidate_text_overlay()
         self.central_widget.update()
 
     def after(self, ms, func):
@@ -2517,6 +3165,10 @@ class MagicMirrorApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    default_font = app.font()
+    default_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    default_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(default_font)
     app.setWindowIcon(QIcon("resources/icon.png"))
     window = MagicMirrorApp()
     window.show()

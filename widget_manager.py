@@ -4,6 +4,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, date, timedelta
+from dateutil.rrule import rrulestr
 import feedparser
 from icalendar import Calendar
 import pytz
@@ -106,10 +107,46 @@ def collect_ical_urls(config, widget_name):
             fallback_urls.extend(settings.get("urls", []))
     return fallback_urls
 
-def fetch_ical_events(urls):
+def _normalize_ical_datetime(dt_value):
+    if isinstance(dt_value, datetime):
+        event_dt = dt_value
+        is_dt = True
+    elif isinstance(dt_value, date):
+        event_dt = datetime.combine(dt_value, datetime.min.time())
+        is_dt = False
+    else:
+        return None, None
+
+    if event_dt.tzinfo is None:
+        event_dt = pytz.utc.localize(event_dt)
+    else:
+        event_dt = event_dt.astimezone(pytz.utc)
+    return event_dt, is_dt
+
+def _extract_exdates(component):
+    exdates = set()
+    exdate_props = component.get("exdate")
+    if not exdate_props:
+        return exdates
+    if not isinstance(exdate_props, list):
+        exdate_props = [exdate_props]
+    for exdate_prop in exdate_props:
+        values = getattr(exdate_prop, "dts", [])
+        for value in values:
+            ex_dt, _ = _normalize_ical_datetime(value.dt)
+            if ex_dt is not None:
+                exdates.add(ex_dt)
+    return exdates
+
+def fetch_ical_events(urls, window_start=None, window_end=None):
     all_events = []
     had_errors = False
     now = datetime.now(pytz.utc)
+    if window_start is None:
+        window_start = now
+    if window_end is None:
+        window_end = window_start + timedelta(days=180)
+    seen = set()
 
     for url in urls:
         if not url or "YOUR_ICAL_URL_HERE" in url:
@@ -128,23 +165,32 @@ def fetch_ical_events(urls):
                 dtstart_raw = dtstart_prop.dt
                 summary = str(component.get("summary", "(No title)"))
                 location = str(component.get("location", "")).strip()
-
-                if isinstance(dtstart_raw, datetime):
-                    event_dt = dtstart_raw
-                    is_dt = True
-                elif isinstance(dtstart_raw, date):
-                    event_dt = datetime.combine(dtstart_raw, datetime.min.time())
-                    is_dt = False
-                else:
+                uid = str(component.get("uid", f"{summary}|{location}"))
+                event_dt, is_dt = _normalize_ical_datetime(dtstart_raw)
+                if event_dt is None:
                     continue
+                exdates = _extract_exdates(component)
 
-                if event_dt.tzinfo is None:
-                    event_dt = pytz.utc.localize(event_dt)
+                rrule_value = component.get("rrule")
+                if rrule_value:
+                    try:
+                        rule = rrulestr(rrule_value.to_ical().decode("utf-8"), dtstart=event_dt)
+                        occurrences = rule.between(window_start, window_end, inc=True)
+                    except Exception:
+                        occurrences = [event_dt]
                 else:
-                    event_dt = event_dt.astimezone(pytz.utc)
+                    occurrences = [event_dt]
 
-                if event_dt >= now:
-                    all_events.append((event_dt, summary, is_dt, location))
+                for occurrence_dt in occurrences:
+                    if occurrence_dt in exdates:
+                        continue
+                    if occurrence_dt < window_start or occurrence_dt >= window_end:
+                        continue
+                    dedupe_key = (uid, occurrence_dt, summary, location)
+                    if dedupe_key in seen:
+                        continue
+                    seen.add(dedupe_key)
+                    all_events.append((occurrence_dt, summary, is_dt, location))
         except Exception as e:
             print(f"iCal fetch parse error {url}: {e}")
             had_errors = True
@@ -430,6 +476,7 @@ class ICalWidget(BaseWidget):
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
             ical_urls = collect_ical_urls(self.config, self.widget_name)
             display_tz_str = widget_settings.get("timezone", "UTC")
+            style = widget_settings.get("style", "Agenda")
             try:
                 display_tz = pytz.timezone(display_tz_str)
             except pytz.exceptions.UnknownTimeZoneError:
@@ -437,6 +484,38 @@ class ICalWidget(BaseWidget):
 
             if not ical_urls:
                 self.set_error("no urls", app, "Set iCal URLs in widget settings")
+                return
+
+            if style == "Month Calendar":
+                month_start = datetime.now(display_tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                next_month = (month_start + timedelta(days=32)).replace(day=1)
+                all_events, had_errors = fetch_ical_events(
+                    ical_urls,
+                    window_start=month_start.astimezone(pytz.utc),
+                    window_end=next_month.astimezone(pytz.utc),
+                )
+                if not all_events and had_errors:
+                    self.set_error("fetch", app, "iCal  Error")
+                    return
+                month_events = {}
+                for event_time, summary, is_dt, _location in all_events:
+                    local = event_time.astimezone(display_tz)
+                    if local < month_start or local >= next_month:
+                        continue
+                    day_key = local.date().isoformat()
+                    if day_key not in month_events:
+                        month_events[day_key] = []
+                    label = f"{local.strftime('%I:%M %p').lstrip('0')} {summary}" if is_dt else summary
+                    month_events[day_key].append(label.strip())
+
+                self.month_calendar_data = {
+                    "year": month_start.year,
+                    "month": month_start.month,
+                    "month_name": month_start.strftime("%B %Y"),
+                    "events": month_events,
+                }
+                self.mark_updated()
+                self.set_text(self.month_calendar_data["month_name"], app)
                 return
 
             all_events, had_errors = fetch_ical_events(ical_urls)
@@ -466,6 +545,15 @@ class ICalWidget(BaseWidget):
         thread.daemon = True
         thread.start()
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
+
+    def draw(self, painter, app):
+        widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
+        if widget_settings.get("style", "Agenda") != "Month Calendar":
+            return super().draw(painter, app)
+        data = getattr(self, "month_calendar_data", None)
+        if not data:
+            return super().draw(painter, app)
+        app.draw_ical_month_widget(painter, self.widget_name, data)
 
 class CommuteWidget(BaseWidget):
     def _update_text_worker(self, app):

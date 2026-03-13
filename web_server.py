@@ -328,7 +328,7 @@ HTML_TEMPLATE = """
             if (!config.widget_settings) config.widget_settings = {};
             
             const defaults = {};
-            if (type === "ical") defaults.urls = [], defaults.timezone = "US/Central";
+            if (type === "ical") defaults.urls = [], defaults.timezone = "US/Central", defaults.style = "Agenda", defaults.day_event_limit = 2;
             else if (type === "commute") { defaults.urls = []; defaults.timezone = "US/Central"; defaults.commute_minutes = 25; defaults.prep_minutes = 10; defaults.lookahead_hours = 24; }
             else if (type === "dailyagenda") { defaults.urls = []; defaults.timezone = "US/Central"; defaults.max_events = 6; defaults.days_ahead = 3; }
             else if (type === "photomemories") {
