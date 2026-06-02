@@ -31,7 +31,7 @@ try:
     import psutil
 except ImportError:
     psutil = None
-from widget_manager import WidgetManager, WIDGET_CLASSES
+from widget_manager import SESSION, WidgetManager, WIDGET_CLASSES
 import web_server
 import calendar
 
@@ -174,6 +174,34 @@ WIDGET_REGISTRY = {
         "supports_ticker": widget_type in {"rss", "sports", "stock"},
     }
     for widget_type in WIDGET_DISPLAY_NAMES
+}
+
+SPORTS_LEAGUE_OPTIONS = {
+    "NFL": "NFL",
+    "NBA": "NBA",
+    "MLB": "MLB",
+    "NHL": "NHL",
+    "NCAAF": "College Football",
+    "NCAAMB": "Men's College Basketball",
+}
+
+SPORTS_TEAM_API_URLS = {
+    "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams",
+    "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams",
+    "MLB": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/teams",
+    "NHL": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams",
+    "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams",
+    "NCAAMB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/teams",
+}
+SPORTS_TEAM_CACHE = {}
+
+SPORTS_TEAM_OPTIONS = {
+    "NFL": ["ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC", "LV", "LAC", "LAR", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WSH"],
+    "NBA": ["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GS", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NO", "NY", "OKC", "ORL", "PHI", "PHX", "POR", "SA", "SAC", "TOR", "UTA", "WSH"],
+    "MLB": ["ARI", "ATL", "BAL", "BOS", "CHC", "CIN", "CLE", "COL", "CWS", "DET", "HOU", "KC", "LAA", "LAD", "MIA", "MIL", "MIN", "NYM", "NYY", "ATH", "PHI", "PIT", "SD", "SEA", "SF", "STL", "TB", "TEX", "TOR", "WSH"],
+    "NHL": ["ANA", "BOS", "BUF", "CAR", "CBJ", "CGY", "CHI", "COL", "DAL", "DET", "EDM", "FLA", "LA", "MIN", "MTL", "NJ", "NSH", "NYI", "NYR", "OTT", "PHI", "PIT", "SEA", "SJ", "STL", "TB", "TOR", "UTA", "VAN", "VGK", "WPG", "WSH"],
+    "NCAAF": ["ALA", "ARK", "AUB", "CLEM", "FLA", "FSU", "GA", "IA", "LSU", "MICH", "ND", "OKLA", "ORE", "OSU", "PSU", "TENN", "TEX", "USC", "WISC"],
+    "NCAAMB": ["ARIZ", "ARK", "AUB", "BAY", "CONN", "DUKE", "GONZ", "HOU", "IU", "KU", "UK", "MSU", "UNC", "NOVA", "PUR", "TENN", "UCLA", "WISC"],
 }
 
 def format_widget_display_name(widget_name):
@@ -2099,14 +2127,70 @@ class SettingsDialog(QDialog):
         self.update_ical_feed_color_ui(row)
         return row
 
-    def add_sport_config(self, list_widget, league_input, teams_input):
-        l = league_input.text()
-        t = teams_input.text()
-        if l:
-            list_widget.addItem(f"{l}: {t}")
-            league_input.clear()
-            teams_input.clear()
-            self.save_current_widget_ui_to_config()
+    def normalize_sports_league(self, value):
+        raw = (value or "").strip()
+        upper = raw.upper()
+        if upper in SPORTS_LEAGUE_OPTIONS:
+            return upper
+        for code, label in SPORTS_LEAGUE_OPTIONS.items():
+            if raw.lower() == label.lower():
+                return code
+        return upper
+
+    def get_sports_teams_for_league(self, league):
+        league = self.normalize_sports_league(league)
+        if league in SPORTS_TEAM_CACHE:
+            return SPORTS_TEAM_CACHE[league]
+
+        teams = []
+        url = SPORTS_TEAM_API_URLS.get(league)
+        if url:
+            try:
+                payload = SESSION.get(url, timeout=8).json()
+                for sport in payload.get("sports", []):
+                    for league_data in sport.get("leagues", []):
+                        for item in league_data.get("teams", []):
+                            team = item.get("team", item)
+                            abbr = (team.get("abbreviation") or team.get("shortDisplayName") or "").strip().upper()
+                            name = (team.get("displayName") or team.get("name") or abbr).strip()
+                            if abbr:
+                                teams.append((abbr, f"{abbr} - {name}"))
+                teams = sorted(dict(teams).items())
+            except Exception as e:
+                print(f"Could not load ESPN teams for {league}: {e}")
+
+        if not teams:
+            teams = [(team, team) for team in SPORTS_TEAM_OPTIONS.get(league, [])]
+        SPORTS_TEAM_CACHE[league] = teams
+        return teams
+
+    def update_sports_team_combo(self, league_combo, team_combo):
+        league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
+        team_combo.blockSignals(True)
+        current = team_combo.currentText()
+        team_combo.clear()
+        team_combo.addItem("All Teams", "")
+        for team, label in self.get_sports_teams_for_league(league):
+            team_combo.addItem(label, team)
+        if current:
+            team_combo.setCurrentText(current)
+        team_combo.blockSignals(False)
+
+    def add_sport_config(self, list_widget, league_combo, team_combo):
+        league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
+        team_value = team_combo.currentData() if team_combo.currentData() is not None else team_combo.currentText()
+        team = (team_value or "").split(" - ", 1)[0].strip().upper()
+        if not league:
+            return
+        label = team if team else "All"
+        list_widget.addItem(f"{league}: {label}")
+        team_combo.setCurrentIndex(0)
+        self.save_current_widget_ui_to_config()
+
+    def reload_sports_teams(self, league_combo, team_combo):
+        league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
+        SPORTS_TEAM_CACHE.pop(league, None)
+        self.update_sports_team_combo(league_combo, team_combo)
 
     def select_folder_for_entry(self, entry_widget):
         start_dir = entry_widget.text() if entry_widget.text() and os.path.isdir(entry_widget.text()) else ""
@@ -2417,11 +2501,22 @@ class SettingsDialog(QDialog):
             add_row("Sports Configs:", list_widget)
             
             input_layout = QHBoxLayout()
-            league_input = QLineEdit(); league_input.setPlaceholderText("League (e.g. NFL)")
-            teams_input = QLineEdit(); teams_input.setPlaceholderText("Teams (comma sep or 'All')")
+            league_input = QComboBox(); league_input.setObjectName("sports_league_combo")
+            league_input.setEditable(True)
+            for league, label in SPORTS_LEAGUE_OPTIONS.items():
+                league_input.addItem(label, league)
+            team_input = QComboBox(); team_input.setObjectName("sports_team_combo")
+            team_input.setEditable(True)
+            self.update_sports_team_combo(league_input, team_input)
+            league_input.currentTextChanged.connect(lambda *_: self.update_sports_team_combo(league_input, team_input))
             add_btn = QPushButton("Add")
-            add_btn.clicked.connect(lambda: self.add_sport_config(list_widget, league_input, teams_input))
-            input_layout.addWidget(league_input); input_layout.addWidget(teams_input); input_layout.addWidget(add_btn)
+            add_btn.clicked.connect(lambda: self.add_sport_config(list_widget, league_input, team_input))
+            reload_btn = QPushButton("Reload Teams")
+            reload_btn.clicked.connect(lambda: self.reload_sports_teams(league_input, team_input))
+            input_layout.addWidget(league_input)
+            input_layout.addWidget(team_input)
+            input_layout.addWidget(add_btn)
+            input_layout.addWidget(reload_btn)
             self.widget_settings_layout.addLayout(input_layout)
             
             rem_btn = QPushButton("Remove Selected")
@@ -2525,7 +2620,7 @@ class SettingsDialog(QDialog):
             scale_slider.setRange(10, 100)
             scale_slider.setValue(int(settings.get("image_scale", 0.35) * 100))
             scale_slider.valueChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Image Scale (% width):", scale_slider)
+            add_row("Photo Width (% screen):", scale_slider)
 
         elif widget_type == "flightboard":
             entry = QLineEdit(); entry.setObjectName("flight_number_entry")
@@ -2763,8 +2858,8 @@ class SettingsDialog(QDialog):
                     if len(parts) == 2:
                         league = parts[0].strip()
                         teams_str = parts[1].strip()
-                        teams = [t.strip() for t in teams_str.split(",")] if teams_str.lower() != 'all' and teams_str else []
-                        configs.append({"league": league, "teams": teams})
+                        teams = [t.strip().upper() for t in teams_str.split(",") if t.strip()] if teams_str.lower() not in ("all", "all teams") and teams_str else []
+                        configs.append({"league": league.upper(), "teams": teams})
                 settings["configs"] = configs
             combo = self.widget_settings_area.findChild(QComboBox, "tz_combo")
             if combo: settings["timezone"] = combo.currentText()
@@ -3210,6 +3305,7 @@ class MagicMirrorApp(QMainWindow):
             if widget_type == "photomemories" and key == "folder":
                 if settings.get("source_mode", "folder") == "single":
                     value = settings.get("single_file")
+                    key = "single_file"
             if isinstance(value, list) and len(value) == 0:
                 return self.get_missing_setting_message(widget_type, key)
             if value in ("", None):
@@ -3229,7 +3325,8 @@ class MagicMirrorApp(QMainWindow):
             ("package", "company"): "Add carrier",
             ("package", "tracking_number"): "Add tracking number",
             ("package", "api_key"): "Add package API key",
-            ("photomemories", "folder"): "Choose photo source",
+            ("photomemories", "folder"): "Choose photo folder",
+            ("photomemories", "single_file"): "Choose photo file",
         }
         return messages.get((widget_type, key), f"Set {key.replace('_', ' ')}")
 
@@ -4488,7 +4585,7 @@ class MagicMirrorApp(QMainWindow):
 
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         try:
-            scale = float(self.get_widget_layout(widget_name).get("width", settings.get("image_scale", 0.35)))
+            scale = float(settings.get("image_scale", 0.35))
         except (TypeError, ValueError):
             scale = 0.35
         scale = max(0.1, min(1.0, scale))

@@ -888,7 +888,7 @@ class PhotoMemoriesWidget(BaseWidget):
 
         if source_mode == "single":
             if not single_file:
-                self.text = "Photo Memories\nSet single photo in widget settings"
+                self.text = "Photo Memories\nChoose photo file"
                 return
             if not os.path.isfile(single_file):
                 self.text = "Photo Memories\nSelected photo not found"
@@ -903,7 +903,7 @@ class PhotoMemoriesWidget(BaseWidget):
             return
 
         if not folder:
-            self.text = "Photo Memories\nSet folder in widget settings"
+            self.text = "Photo Memories\nChoose photo folder"
             return
         if not os.path.isdir(folder):
             self.text = "Photo Memories\nFolder not found"
