@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import time
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
@@ -592,6 +592,10 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(900, 600)
 
         self.layout = QVBoxLayout(self)
+        self.context_header = QLabel()
+        self.context_header.setWordWrap(True)
+        self.context_header.setStyleSheet("padding:8px 10px; background:#222; color:#eee; border-radius:6px;")
+        self.layout.addWidget(self.context_header)
         self.tabs = QTabWidget()
         self.layout.addWidget(self.tabs)
 
@@ -615,6 +619,11 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self.widget_tab, "Widgets")
         self.setup_widget_tab()
 
+        self.issues_tab = QWidget()
+        self.issues_layout = QVBoxLayout(self.issues_tab)
+        self.tabs.addTab(self.issues_tab, "Issues")
+        self.setup_issues_tab()
+
         self.diagnostics_tab = QWidget()
         self.diagnostics_layout = QVBoxLayout(self.diagnostics_tab)
         self.tabs.addTab(self.diagnostics_tab, "Diagnostics")
@@ -624,6 +633,7 @@ class SettingsDialog(QDialog):
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         self.layout.addWidget(self.button_box)
+        self.refresh_context_header()
 
     def setup_general_tab(self):
         scroll = QScrollArea()
@@ -1044,6 +1054,86 @@ class SettingsDialog(QDialog):
         self.refresh_diagnostics()
         layout.addStretch()
 
+    def setup_issues_tab(self):
+        layout = QVBoxLayout(self.issues_tab)
+        self.issues_summary_label = QLabel()
+        self.issues_summary_label.setWordWrap(True)
+        layout.addWidget(self.issues_summary_label)
+        self.issues_list = QListWidget()
+        self.issues_list.currentItemChanged.connect(self.update_issue_detail)
+        layout.addWidget(self.issues_list)
+        self.issue_detail_label = QLabel()
+        self.issue_detail_label.setWordWrap(True)
+        layout.addWidget(self.issue_detail_label)
+        issue_btn_row = QHBoxLayout()
+        self.fix_issue_btn = QPushButton("Fix Selected Issue")
+        self.fix_issue_btn.clicked.connect(self.fix_selected_issue)
+        issue_btn_row.addWidget(self.fix_issue_btn)
+        self.refresh_issues_btn = QPushButton("Refresh Issues")
+        self.refresh_issues_btn.clicked.connect(self.refresh_issues)
+        issue_btn_row.addWidget(self.refresh_issues_btn)
+        layout.addLayout(issue_btn_row)
+        self.refresh_issues()
+
+    def refresh_context_header(self):
+        if not hasattr(self, "context_header"):
+            return
+        active_page = self.config.get("active_page", "default")
+        current_scene = self.parent.current_scene_name or "Manual"
+        visible_count = sum(1 for name in self.parent.get_sorted_widget_names() if self.parent.widget_is_visible(name))
+        issue_count = len(self.parent.collect_user_issues()) if hasattr(self.parent, "collect_user_issues") else 0
+        next_scene = self.parent.get_next_scene_summary() if hasattr(self.parent, "get_next_scene_summary") else "No upcoming scheduled scene"
+        self.context_header.setText(
+            f"Showing: {active_page}  |  Why: {current_scene}  |  Visible widgets: {visible_count}  |  Issues: {issue_count}\n"
+            f"Next: {next_scene}"
+        )
+
+    def refresh_issues(self):
+        if not hasattr(self, "issues_list"):
+            return
+        issues = self.parent.collect_user_issues()
+        self.issues_list.clear()
+        for issue in issues:
+            item = QListWidgetItem(issue.get("title", "Issue"))
+            item.setData(Qt.ItemDataRole.UserRole, issue)
+            self.issues_list.addItem(item)
+        if issues:
+            self.issues_summary_label.setText(f"{len(issues)} issue{'s' if len(issues) != 1 else ''} need attention.")
+            self.issues_list.setCurrentRow(0)
+        else:
+            self.issues_summary_label.setText("No issues found. The mirror looks ready.")
+            self.issue_detail_label.setText("")
+        self.refresh_context_header()
+
+    def update_issue_detail(self):
+        item = self.issues_list.currentItem() if hasattr(self, "issues_list") else None
+        if not item:
+            self.issue_detail_label.setText("")
+            return
+        issue = item.data(Qt.ItemDataRole.UserRole)
+        self.issue_detail_label.setText(f"{issue.get('detail', '')}\n\nSuggested fix: {issue.get('fix_label', 'Review settings')}")
+
+    def fix_selected_issue(self):
+        item = self.issues_list.currentItem() if hasattr(self, "issues_list") else None
+        if not item:
+            return
+        issue = item.data(Qt.ItemDataRole.UserRole)
+        target = issue.get("target", "")
+        action = issue.get("action", "")
+        if action == "open_widget" and target:
+            self.tabs.setCurrentWidget(self.widget_tab)
+            for i in range(self.widget_list.count()):
+                list_item = self.widget_list.item(i)
+                if list_item.data(Qt.ItemDataRole.UserRole) == target:
+                    self.widget_list.setCurrentItem(list_item)
+                    break
+        elif action == "open_pages":
+            self.tabs.setCurrentWidget(self.pages_tab)
+        elif action == "open_general":
+            self.tabs.setCurrentWidget(self.general_tab)
+        else:
+            self.tabs.setCurrentWidget(self.diagnostics_tab)
+
     def add_ticker_speed_row(self, settings, add_row):
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setObjectName("ticker_speed_slider")
@@ -1256,6 +1346,7 @@ class SettingsDialog(QDialog):
             self.config.setdefault("layout_pages", []).append(page)
         if hasattr(self, "page_list"):
             self.refresh_page_manager(select_page=page)
+        self.refresh_context_header()
         self.parent.central_widget.update()
 
     def refresh_page_manager(self, select_page=None):
@@ -1463,6 +1554,7 @@ class SettingsDialog(QDialog):
         self.refresh_page_manager(select_page=page)
         self.parent.central_widget.update()
         self.parent.save_config()
+        self.refresh_issues()
 
     def remove_selected_page(self):
         item = self.page_list.currentItem() if hasattr(self, "page_list") else None
@@ -1488,6 +1580,7 @@ class SettingsDialog(QDialog):
         self.refresh_widget_list()
         self.parent.central_widget.update()
         self.parent.save_config()
+        self.refresh_issues()
 
     def set_selected_page_active(self):
         item = self.page_list.currentItem() if hasattr(self, "page_list") else None
@@ -1515,11 +1608,14 @@ class SettingsDialog(QDialog):
             self.refresh_widget_list()
             self.parent.central_widget.update()
             self.parent.save_config()
+            self.refresh_issues()
 
     def live_update_scene_schedule_enabled(self, state):
         self.config["scene_schedule_enabled"] = self.scene_schedule_check.isChecked()
         self.parent.apply_scene_schedule()
+        self.refresh_context_header()
         self.refresh_diagnostics()
+        self.refresh_issues()
 
     def apply_scene_schedule_editor(self):
         try:
@@ -1533,6 +1629,7 @@ class SettingsDialog(QDialog):
             self.parent.save_config()
             self.refresh_page_manager()
             self.refresh_diagnostics()
+            self.refresh_issues()
             QMessageBox.information(self, "Scene Scheduler", "Scene schedule updated.")
         except Exception as e:
             QMessageBox.warning(self, "Scene Scheduler Error", f"Could not apply schedule:\n{e}")
@@ -1542,6 +1639,7 @@ class SettingsDialog(QDialog):
         self.sync_scene_editor_from_config()
         self.parent.save_config()
         self.refresh_page_manager()
+        self.refresh_issues()
 
     def _profiles_dir(self):
         return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "profiles")
@@ -1588,6 +1686,7 @@ class SettingsDialog(QDialog):
             self.refresh_page_manager()
             self.refresh_widget_list()
             self.refresh_diagnostics()
+            self.refresh_issues()
             QMessageBox.information(self, "Profile Loaded", f"Loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.warning(self, "Profile Error", f"Could not load profile:\n{e}")
@@ -1627,6 +1726,7 @@ class SettingsDialog(QDialog):
             f"Current Scene: {self.parent.current_scene_name or 'none'}",
             f"Scene Scheduler: {'ON' if self.config.get('scene_schedule_enabled') else 'OFF'}",
             f"Web Management: {'ON' if self.config.get('web_server_enabled') else 'OFF'}",
+            f"Issues: {len(self.parent.collect_user_issues())}",
             "",
             "Per-widget diagnostics:",
             *widget_lines,
@@ -1681,6 +1781,10 @@ class SettingsDialog(QDialog):
         self.widget_search.setPlaceholderText("Search widget types...")
         self.widget_search.textChanged.connect(self.filter_widget_types)
         controls_layout.addWidget(self.widget_search)
+        self.widget_category_combo = QComboBox()
+        self.widget_category_combo.addItems(["All Categories"] + sorted({meta.get("category", "Other") for meta in WIDGET_REGISTRY.values()}))
+        self.widget_category_combo.currentTextChanged.connect(self.filter_widget_types)
+        controls_layout.addWidget(self.widget_category_combo)
         self.filter_widget_types("")
 
         left_layout.addWidget(controls_group)
@@ -1749,12 +1853,18 @@ class SettingsDialog(QDialog):
                 break
 
     def filter_widget_types(self, text):
-        text = (text or "").strip().lower()
+        text = (self.widget_search.text() if hasattr(self, "widget_search") else text or "").strip().lower()
+        category_filter = self.widget_category_combo.currentText() if hasattr(self, "widget_category_combo") else "All Categories"
         visible_widget_types = [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}]
         if text:
             visible_widget_types = [
                 w for w in visible_widget_types
                 if text in w.lower() or text in WIDGET_DISPLAY_NAMES.get(w, w.replace("_", " ").title()).lower()
+            ]
+        if category_filter and category_filter != "All Categories":
+            visible_widget_types = [
+                w for w in visible_widget_types
+                if WIDGET_REGISTRY.get(w, {}).get("category", "Other") == category_filter
             ]
         self.widget_combo.clear()
         for widget_type in visible_widget_types:
@@ -1815,6 +1925,7 @@ class SettingsDialog(QDialog):
         if self.parent.remove_widget_by_name(widget_name, confirm=True):
             self.refresh_page_manager()
             self.refresh_widget_list()
+            self.refresh_issues()
             # Clear settings area
             new_container = QWidget()
             new_layout = QVBoxLayout(new_container)
@@ -3078,6 +3189,17 @@ class MagicMirrorApp(QMainWindow):
         return True
 
     def get_widget_status(self, widget_name):
+        issue = self.get_widget_setup_issue(widget_name)
+        if issue:
+            return issue
+        widget = self.widget_manager.widgets.get(widget_name) if getattr(self, "widget_manager", None) else None
+        if widget and getattr(widget, "last_error", ""):
+            return "Last refresh failed"
+        if not self.widget_is_visible(widget_name):
+            return "Hidden now"
+        return "Ready"
+
+    def get_widget_setup_issue(self, widget_name):
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         widget_type = widget_name.split("_")[0]
         needed = WIDGET_REGISTRY.get(widget_type, {}).get("required_settings", [])
@@ -3089,10 +3211,80 @@ class MagicMirrorApp(QMainWindow):
                 if settings.get("source_mode", "folder") == "single":
                     value = settings.get("single_file")
             if isinstance(value, list) and len(value) == 0:
-                return "Needs Setup"
+                return self.get_missing_setting_message(widget_type, key)
             if value in ("", None):
-                return "Needs Setup"
-        return "OK"
+                return self.get_missing_setting_message(widget_type, key)
+        return ""
+
+    @staticmethod
+    def get_missing_setting_message(widget_type, key):
+        messages = {
+            ("ical", "feeds"): "Add calendar feed",
+            ("rss", "urls"): "Add RSS feed URL",
+            ("commute", "urls"): "Add calendar URL",
+            ("dailyagenda", "urls"): "Add calendar URL",
+            ("stock", "api_key"): "Add stock API key",
+            ("flightboard", "flight_number"): "Add flight number",
+            ("flightboard", "api_key"): "Add flight API key",
+            ("package", "company"): "Add carrier",
+            ("package", "tracking_number"): "Add tracking number",
+            ("package", "api_key"): "Add package API key",
+            ("photomemories", "folder"): "Choose photo source",
+        }
+        return messages.get((widget_type, key), f"Set {key.replace('_', ' ')}")
+
+    def collect_user_issues(self):
+        issues = []
+        for name in self.get_sorted_widget_names():
+            setup_issue = self.get_widget_setup_issue(name)
+            if setup_issue:
+                issues.append({
+                    "title": f"{format_widget_display_name(name)}: {setup_issue}",
+                    "detail": f"{format_widget_display_name(name)} is missing required setup before it can show useful information.",
+                    "fix_label": "Open this widget's settings.",
+                    "action": "open_widget",
+                    "target": name,
+                })
+            widget = self.widget_manager.widgets.get(name)
+            last_error = getattr(widget, "last_error", "") if widget else ""
+            if last_error:
+                issues.append({
+                    "title": f"{format_widget_display_name(name)}: refresh failed",
+                    "detail": f"The widget reported: {last_error}",
+                    "fix_label": "Open this widget's settings or refresh diagnostics.",
+                    "action": "open_widget",
+                    "target": name,
+                })
+
+        active_page = self.config.get("active_page", "default")
+        visible = [name for name in self.get_sorted_widget_names() if self.widget_is_visible(name)]
+        if not visible:
+            issues.append({
+                "title": f"Page '{active_page}' has no visible widgets",
+                "detail": "The current page may look empty because no widgets are assigned to it or visible right now.",
+                "fix_label": "Open Pages and assign widgets or switch page.",
+                "action": "open_pages",
+            })
+
+        for rule in self.config.get("scene_schedule", []):
+            page = rule.get("page", "default")
+            if rule.get("enabled") and page not in self.get_layout_pages():
+                issues.append({
+                    "title": f"Scene '{rule.get('name', 'Scene')}' points to a missing page",
+                    "detail": f"The scene is scheduled to show '{page}', but that page does not exist.",
+                    "fix_label": "Open Pages and update the scene.",
+                    "action": "open_pages",
+                })
+
+        if self.config.get("web_server_enabled") and self.config.get("web_server_host") not in {"127.0.0.1", "localhost", "::1"} and not self.config.get("web_server_token"):
+            issues.append({
+                "title": "Web manager is exposed without a token",
+                "detail": "The web manager can change mirror settings. LAN access should use a token.",
+                "fix_label": "Open General web settings.",
+                "action": "open_general",
+            })
+
+        return issues
 
     def get_builtin_template_map(self):
         return {
@@ -3573,6 +3765,34 @@ class MagicMirrorApp(QMainWindow):
             if self._time_window_matches(rule.get("start_time", ""), rule.get("end_time", ""), now):
                 return rule
         return None
+
+    def get_next_scene_summary(self):
+        if not self.config.get("scene_schedule_enabled", False):
+            return "Scene scheduler is off"
+        now = datetime.now()
+        candidates = []
+        for rule in self.config.get("scene_schedule", []):
+            if not rule.get("enabled"):
+                continue
+            start_time = rule.get("start_time", "")
+            try:
+                hours, minutes = [int(part) for part in start_time.split(":", 1)]
+            except (TypeError, ValueError):
+                continue
+            for day_offset in range(8):
+                candidate = now + timedelta(days=day_offset)
+                candidate_start = candidate.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+                if candidate_start <= now:
+                    continue
+                if not self._days_match(rule.get("days", []), candidate_start):
+                    continue
+                candidates.append((candidate_start, rule))
+                break
+        if not candidates:
+            return "No upcoming scheduled scene"
+        next_time, rule = min(candidates, key=lambda item: item[0])
+        day_text = "today" if next_time.date() == now.date() else next_time.strftime("%a")
+        return f"{rule.get('name', 'Scene')} at {next_time.strftime('%H:%M')} {day_text} -> {rule.get('page', 'default')}"
 
     def apply_scene_schedule(self):
         rule = self.get_matching_scene_rule()
