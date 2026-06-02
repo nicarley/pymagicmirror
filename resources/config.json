@@ -1,0 +1,483 @@
+{
+    "camera_index": 0,
+    "video_rotation": 0,
+    "mirror_video": false,
+    "fullscreen": true,
+    "text_scale_multiplier": 1.14,
+    "feed_refresh_interval_ms": 21600000,
+    "widget_positions": {
+        "date_1": {
+            "x": 0.06,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.19,
+            "height": 0.08,
+            "z": 2,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "history_1": {
+            "x": 0.03,
+            "y": 0.74,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.07,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "weatherforecast_1": {
+            "x": 0.85,
+            "y": 0.05,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "sports_1": {
+            "x": 0.1411458333333333,
+            "y": 0.9682331241052748,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "time_1": {
+            "x": 0.06,
+            "y": 0.03,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "ical_1": {
+            "x": 0.03,
+            "y": 0.11,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "rss_1": {
+            "x": 0.72,
+            "y": 0.58,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "worldclock_1": {
+            "x": 0.36,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "worldclock_2": {
+            "x": 0.5,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "worldclock_3": {
+            "x": 0.43,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "worldclock_4": {
+            "x": 0.29,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "worldclock_5": {
+            "x": 0.5700000000000001,
+            "y": 0.01,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "quotes_1": {
+            "x": 0.29,
+            "y": 0.08,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "moon_1": {
+            "x": 0.85,
+            "y": 0.02,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "sunrise_1": {
+            "x": 0.76,
+            "y": 0.02,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        },
+        "rss_2": {
+            "x": 0.44,
+            "y": 0.75,
+            "anchor": "nw",
+            "width": 0.18,
+            "height": 0.08,
+            "z": 0,
+            "locked": false,
+            "page": "default",
+            "group": "",
+            "visibility_rules": {
+                "enabled": false,
+                "start_time": "",
+                "end_time": "",
+                "days": [],
+                "background_modes": []
+            }
+        }
+    },
+    "widget_settings": {
+        "date_1": {
+            "format": "%A, %B %d, %Y",
+            "font_scale": 1
+        },
+        "weatherforecast_1": {
+            "location": "Salem, IL",
+            "style": "Normal",
+            "font_scale": 1
+        },
+        "history_1": {
+            "max_width_chars": 150,
+            "font_scale": 0.89
+        },
+        "sports_1": {
+            "configs": [
+                {
+                    "league": "NCAAMB",
+                    "teams": []
+                },
+                {
+                    "league": "NCAAF",
+                    "teams": []
+                },
+                {
+                    "league": "NHL",
+                    "teams": []
+                },
+                {
+                    "league": "NBA",
+                    "teams": []
+                }
+            ],
+            "style": "Ticker",
+            "timezone": "US/Central",
+            "font_scale": 1.26,
+            "ticker_speed": 1
+        },
+        "time_1": {
+            "format": "12h",
+            "font_scale": 1
+        },
+        "ical_1": {
+            "urls": [
+                "https://p42-caldav.icloud.com/published/2/NDg5Mzk3MjQ0ODkzOTcyNE4vXtfFHyVBIIjD1v3P9VT0kN8xf9dXlKNd8k4LFiOb",
+                "https://p52-caldav.icloud.com/published/2/MTAxNDkzMzQ5ODEwMTQ5Mxo0XPsIRRVwopGvrcnOxZ52S_fHU9xyd9Gf8QYsGlGRpYG7DlR0Ri4HB92WXNQBbiSTodrlG7Qtao5QV0Jac2M",
+                "https://calendar.google.com/calendar/u/0?cid=bmljYXJsZXlAZ21haWwuY29t",
+                "https://outlook.office365.com/owa/calendar/3406d02feb504fe9a2ab89aa873ddc15@americana.com/13e7018c97a447d7894384e833d4365d13221565013192611009/calendar.ics"
+            ],
+            "timezone": "US/Central",
+            "font_scale": 0.8,
+            "style": "Month Calendar"
+        },
+        "rss_1": {
+            "urls": [
+                "https://rss.nytimes.com/services/xml/rss/nyt/US.xml",
+                "https://feeds.nbcnews.com/nbcnews/public/news",
+                "https://abcnews.go.com/abcnews/topstories"
+            ],
+            "style": "Normal",
+            "title": "News",
+            "article_count": 20,
+            "max_width_chars": 200,
+            "font_scale": 1
+        },
+        "worldclock_1": {
+            "timezone": "US/Arizona",
+            "font_scale": 1,
+            "display_name": "Mesa, AZ"
+        },
+        "worldclock_2": {
+            "timezone": "UTC",
+            "font_scale": 1,
+            "display_name": "UTC"
+        },
+        "worldclock_3": {
+            "timezone": "US/Eastern",
+            "font_scale": 1,
+            "display_name": "KY/FL"
+        },
+        "worldclock_4": {
+            "timezone": "US/Hawaii",
+            "font_scale": 1,
+            "display_name": "Hawaii"
+        },
+        "worldclock_5": {
+            "timezone": "Asia/Manila",
+            "font_scale": 1,
+            "display_name": "Manila"
+        },
+        "quotes_1": {
+            "font_scale": 1
+        },
+        "moon_1": {
+            "font_scale": 1
+        },
+        "rss_2": {
+            "urls": [
+                "https://southernillinoisnow.com/feed/"
+            ],
+            "style": "Normal",
+            "title": "Local News",
+            "article_count": 10,
+            "font_scale": 0.93125,
+            "max_width_chars": 200
+        },
+        "photomemories_1": {
+            "font_scale": 1,
+            "source_mode": "single",
+            "single_file": "C:/Users/admin7/OneDrive - Americana Building Products/Pictures 1/Personal/25399166_10214686473345883_7864983043875900792_n.jpg",
+            "folder": "",
+            "refresh_minutes": 60,
+            "max_name_chars": 45,
+            "image_scale": 0.1
+        },
+        "calendar_2": {
+            "font_scale": 1
+        },
+        "energyprice_1": {
+            "font_scale": 1,
+            "mode": "url",
+            "manual_price": 0.12,
+            "currency_symbol": "$",
+            "unit": "kWh",
+            "price_url": "",
+            "json_key": ""
+        },
+        "sunrise_1": {
+            "lat": 38.624,
+            "lon": -90.184,
+            "font_scale": 1
+        },
+        "package_1": {
+            "font_scale": 1,
+            "company": "ups",
+            "tracking_number": "",
+            "api_key": ""
+        }
+    },
+    "text_color": [
+        48,
+        254,
+        6
+    ],
+    "text_shadow_color": [
+        0,
+        0,
+        0
+    ],
+    "FMP_API_KEY": "YOUR_FMP_API_KEY",
+    "font_family": "Helvetica",
+    "background_opacity": 0.3,
+    "background_mode": "Image",
+    "background_file": "C:/Users/admin7/OneDrive - Americana Building Products/Pictures 1/Backgrounds/Apt-4A-TV-Approved.jpg",
+    "web_server_enabled": false,
+    "background_color": [
+        18,
+        24,
+        32
+    ],
+    "camera_fps": 60,
+    "low_power_mode": false,
+    "snap_to_grid": true,
+    "grid_size": 0.01,
+    "onboarding_completed": true,
+    "active_profile_name": "default",
+    "disabled_builtin_templates": [],
+    "prefer_gpu_acceleration": false,
+    "youtube_quality": "1080p",
+    "sharp_text_mode": false,
+    "background_fit_mode": "fill",
+    "background_crop_x": 0.5,
+    "background_crop_y": 0.5,
+    "background_blur": 5,
+    "background_brightness": 1,
+    "background_volume": 0,
+    "layout_pages": [
+        "default",
+        "morning",
+        "evening",
+        "work",
+        "photo-frame"
+    ],
+    "active_page": "default",
+    "auto_relaunch_on_crash": false
+}
