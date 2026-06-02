@@ -2,7 +2,8 @@ import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
+from http.cookies import SimpleCookie
+from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtGui import QFontDatabase
 
@@ -85,7 +86,7 @@ addField(lg,'Visible From',()=>buildInput('text',layout.visibility_rules?.start_
 addField(lg,'Visible To',()=>buildInput('text',layout.visibility_rules?.end_time||'',e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.end_time=e.target.value}));
 addField(lg,'Days',()=>buildInput('text',(layout.visibility_rules?.days||[]).join(', '),e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.days=e.target.value.split(',').map(v=>v.trim()).filter(Boolean)}));
 card.appendChild(lg);
-const sg=document.createElement('div');sg.className='grid-2';for(const key of Object.keys(settings).sort()){addField(sg,key,()=>createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue}))}card.appendChild(sg);widgets.appendChild(card)}
+const sg=document.createElement('div');sg.className='grid-2';for(const key of Object.keys(settings).sort()){addField(sg,key,()=>createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue},{forceJson:key==='feeds'}))}card.appendChild(sg);widgets.appendChild(card)}
 tab.appendChild(widgets);
 """
 
@@ -138,7 +139,7 @@ function createSection(title){const s=document.createElement('div');s.className=
 function addField(container,label,builder){const g=document.createElement('div');g.className='form-group';const l=document.createElement('label');l.textContent=label;g.appendChild(l);g.appendChild(builder());container.appendChild(g)}
 function buildSelect(options,value,onChange,allowBlank=false){const s=document.createElement('select');if(allowBlank){const b=document.createElement('option');b.value='';b.textContent='';s.appendChild(b)}(options||[]).forEach(opt=>{const o=document.createElement('option');o.value=opt;o.textContent=opt;if(String(opt)===String(value))o.selected=true;s.appendChild(o)});s.onchange=onChange;return s}
 function buildInput(type,value,onChange){const i=document.createElement('input');i.type=type;if(type==='checkbox')i.checked=!!value;else i.value=value??'';i.onchange=onChange;return i}
-function createGenericValueEditor(value,onChange){if(Array.isArray(value)){const i=document.createElement('textarea');i.value=value.join(', ');i.onchange=e=>onChange(e.target.value.split(',').map(v=>v.trim()).filter(Boolean));return i}if(typeof value==='boolean')return buildInput('checkbox',value,e=>onChange(e.target.checked));if(typeof value==='number')return buildInput('number',value,e=>onChange(parseFloat(e.target.value)));if(typeof value==='object'&&value!==null){const i=document.createElement('textarea');i.value=JSON.stringify(value,null,2);i.onchange=e=>{try{onChange(JSON.parse(e.target.value));e.target.style.borderColor='#424242'}catch(_){e.target.style.borderColor='#d9534f'}};return i}return buildInput('text',value??'',e=>onChange(e.target.value))}
+function createGenericValueEditor(value,onChange,options={}){if(Array.isArray(value)&&!options.forceJson){const i=document.createElement('textarea');i.value=value.join(', ');i.onchange=e=>onChange(e.target.value.split(',').map(v=>v.trim()).filter(Boolean));return i}if(typeof value==='boolean')return buildInput('checkbox',value,e=>onChange(e.target.checked));if(typeof value==='number')return buildInput('number',value,e=>onChange(parseFloat(e.target.value)));if((typeof value==='object'&&value!==null)||options.forceJson){const i=document.createElement('textarea');i.value=JSON.stringify(value??[],null,2);i.onchange=e=>{try{onChange(JSON.parse(e.target.value));e.target.style.borderColor='#424242'}catch(_){e.target.style.borderColor='#d9534f'}};return i}return buildInput('text',value??'',e=>onChange(e.target.value))}
 function renderGeneralTab(){/*__GENERAL__*/}
 function renderAppearanceTab(){/*__APPEARANCE__*/}
 function renderWidgetsTab(){/*__WIDGETS__*/}
@@ -162,6 +163,11 @@ def _safe_copy_config(app):
     return json.loads(json.dumps(app.config))
 
 
+def _client_is_loopback(client_address):
+    host = client_address[0] if client_address else ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
 def _build_diagnostics(app):
     lines = [
         f"Background Mode: {app.config.get('background_mode', 'Camera')}",
@@ -170,6 +176,8 @@ def _build_diagnostics(app):
         f"Low Power Mode: {'ON' if app.config.get('low_power_mode') else 'OFF'}",
         f"Render Path: {getattr(app, 'media_backend_name', 'none').upper()}",
         f"Active Page: {app.config.get('active_page', 'default')}",
+        f"Current Scene: {getattr(app, 'current_scene_name', '') or 'none'}",
+        f"Scene Scheduler: {'ON' if app.config.get('scene_schedule_enabled') else 'OFF'}",
         "",
         "Per-widget diagnostics:",
     ]
@@ -192,9 +200,11 @@ def _build_state(app):
         "meta": {
             "available_fonts": sorted(QFontDatabase.families()),
             "widget_types": [w for w in sorted(WIDGET_CLASSES.keys()) if w not in {"sunrise"}],
+            "widget_registry": app.get_widget_registry_summary() if hasattr(app, "get_widget_registry_summary") else {},
             "templates": app.get_available_template_names(),
             "profiles": _list_profiles(),
             "current_profile": config.get("active_profile_name", "default"),
+            "current_scene": getattr(app, "current_scene_name", ""),
             "layout_pages": app.get_layout_pages(),
             "widget_statuses": {name: app.get_widget_status(name) for name in config.get("widget_positions", {})},
             "diagnostics_lines": _build_diagnostics(app),
@@ -277,8 +287,48 @@ def _handle_action(app, action, payload):
 
 
 class MagicMirrorHandler(BaseHTTPRequestHandler):
+    def _configured_token(self):
+        return (self.server.app.config.get("web_server_token") or "").strip()
+
+    def _request_token(self, parsed):
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            return auth_header[7:].strip()
+        query_token = (parse_qs(parsed.query).get("token") or [""])[0].strip()
+        if query_token:
+            return query_token
+        raw_cookie = self.headers.get("Cookie", "")
+        if raw_cookie:
+            cookie = SimpleCookie()
+            cookie.load(raw_cookie)
+            if "magicmirror_token" in cookie:
+                return cookie["magicmirror_token"].value.strip()
+        return ""
+
+    def _is_authorized(self, parsed):
+        token = self._configured_token()
+        if not token or _client_is_loopback(self.client_address):
+            return True
+        return self._request_token(parsed) == token
+
+    def _send_json(self, status, payload):
+        self.send_response(status)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+    def _read_json_payload(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length > 1024 * 1024:
+            raise ValueError("Request body is too large")
+        raw = self.rfile.read(length) if length else b"{}"
+        return json.loads(raw)
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if not self._is_authorized(parsed):
+            self.send_error(401, "Unauthorized")
+            return
         if parsed.path == "/":
             html = HTML_TEMPLATE.replace("__THEME_PRESETS__", json.dumps(THEME_PRESETS)).replace("__ACCESSIBILITY_PRESETS__", json.dumps(ACCESSIBILITY_PRESETS))
             html = html.replace("/*__GENERAL__*/", self.server.general_js)
@@ -287,14 +337,15 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             html = html.replace("/*__DIAGNOSTICS__*/", self.server.diagnostics_js)
             self.send_response(200)
             self.send_header("Content-type", "text/html")
+            token = self._request_token(parsed)
+            if token and token == self._configured_token():
+                self.send_header("Set-Cookie", "magicmirror_token=; Max-Age=0; Path=/")
+                self.send_header("Set-Cookie", f"magicmirror_token={token}; HttpOnly; SameSite=Strict; Path=/")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
             return
         if parsed.path == "/api/state":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(_build_state(self.server.app)).encode("utf-8"))
+            self._send_json(200, _build_state(self.server.app))
             return
         if parsed.path == "/api/preview":
             self.handle_preview()
@@ -302,29 +353,30 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        payload = json.loads(self.rfile.read(length) if length else b"{}")
-        if self.path == "/api/config":
+        parsed = urlparse(self.path)
+        if not self._is_authorized(parsed):
+            self.send_error(401, "Unauthorized")
+            return
+        try:
+            payload = self._read_json_payload()
+        except Exception as e:
+            self.send_error(400, str(e))
+            return
+        if parsed.path == "/api/config":
             try:
-                self.server.app.config.clear()
-                self.server.app.config.update(payload)
-                self.server.app.migrate_config_schema()
-                self.server.app.save_config()
-                self.server.app.handle_remote_config_update()
-                self.send_response(200)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+                validated = self.server.app.normalized_config(payload)
+                self.server.app.call_on_ui_thread(lambda: self.server.app.replace_remote_config(validated), timeout=15)
+                self._send_json(200, {"status": "ok"})
             except Exception as e:
                 self.send_error(500, str(e))
             return
-        if self.path == "/api/action":
+        if parsed.path == "/api/action":
             try:
-                message = _handle_action(self.server.app, payload.get("action", ""), payload.get("payload", {}))
-                self.send_response(200)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok", "message": message}).encode("utf-8"))
+                message = self.server.app.call_on_ui_thread(
+                    lambda: _handle_action(self.server.app, payload.get("action", ""), payload.get("payload", {})),
+                    timeout=20,
+                )
+                self._send_json(200, {"status": "ok", "message": message})
             except Exception as e:
                 self.send_error(500, str(e))
             return
@@ -354,8 +406,8 @@ class MagicMirrorServer(HTTPServer):
         self.diagnostics_js = DIAGNOSTICS_JS
 
 
-def start_server(app, port=815):
-    server = MagicMirrorServer(("0.0.0.0", port), MagicMirrorHandler, app)
+def start_server(app, host="127.0.0.1", port=815):
+    server = MagicMirrorServer((host, port), MagicMirrorHandler, app)
     thread = threading.Thread(target=server.serve_forever)
     thread.daemon = True
     thread.start()

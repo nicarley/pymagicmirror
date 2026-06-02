@@ -75,9 +75,16 @@ DEFAULT_QUOTES = [
 ]
 
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+DEFAULT_REQUEST_TIMEOUT = 10
+
+
+class TimeoutSession(requests.Session):
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT)
+        return super().request(method, url, **kwargs)
 
 def make_session():
-    s = requests.Session()
+    s = TimeoutSession()
     s.headers.update({"User-Agent": USER_AGENT})
     retries = Retry(
         total=3,
@@ -94,18 +101,49 @@ def make_session():
 
 SESSION = make_session()
 
-def collect_ical_urls(config, widget_name):
-    widget_settings = config.get("widget_settings", {}).get(widget_name, {})
-    urls = widget_settings.get("urls", [])
-    if urls:
-        return urls
+def normalize_ical_feed_entries(entries):
+    normalized = []
+    for entry in entries or []:
+        if isinstance(entry, str):
+            url = entry.strip()
+            if url:
+                normalized.append({"url": url, "name": "", "color": ""})
+            continue
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url", "")).strip()
+        if not url:
+            continue
+        name = str(entry.get("name", "")).strip()
+        color = str(entry.get("color", "")).strip()
+        if color.lower() == "default":
+            color = ""
+        normalized.append({"url": url, "name": name, "color": color})
+    return normalized
 
-    # Fallback: reuse URLs from any configured iCal widgets.
-    fallback_urls = []
+
+def collect_ical_feeds(config, widget_name):
+    widget_settings = config.get("widget_settings", {}).get(widget_name, {})
+    feeds = normalize_ical_feed_entries(widget_settings.get("feeds"))
+    if not feeds:
+        feeds = normalize_ical_feed_entries(widget_settings.get("urls"))
+    if feeds:
+        return feeds
+
+    # Fallback: reuse feeds from any configured iCal widgets.
+    fallback_feeds = []
     for key, settings in config.get("widget_settings", {}).items():
-        if key.split("_")[0] == "ical":
-            fallback_urls.extend(settings.get("urls", []))
-    return fallback_urls
+        if key.split("_")[0] != "ical":
+            continue
+        fallback_feeds.extend(
+            normalize_ical_feed_entries(settings.get("feeds")) or
+            normalize_ical_feed_entries(settings.get("urls"))
+        )
+    return fallback_feeds
+
+
+def collect_ical_urls(config, widget_name):
+    return [feed["url"] for feed in collect_ical_feeds(config, widget_name)]
 
 def _normalize_ical_datetime(dt_value):
     if dt_value is None:
@@ -155,7 +193,7 @@ def _extract_exdates(component):
                 exdates.add(ex_dt)
     return exdates
 
-def fetch_ical_events(urls, window_start=None, window_end=None):
+def fetch_ical_events(feed_entries, window_start=None, window_end=None):
     all_events = []
     had_errors = False
     now = datetime.now(pytz.utc)
@@ -165,7 +203,10 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
         window_end = window_start + timedelta(days=180)
     seen = set()
 
-    for url in urls:
+    for feed in normalize_ical_feed_entries(feed_entries):
+        url = feed["url"]
+        feed_name_override = feed.get("name", "")
+        feed_color_override = feed.get("color", "")
         if not url or "YOUR_ICAL_URL_HERE" in url:
             continue
         try:
@@ -192,8 +233,8 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
                         "location": str(component.get("location", "")).strip(),
                         "is_all_day": not is_dt,
                         "source_url": url,
-                        "calendar_name": str(component.get("x-wr-calname") or url),
-                        "calendar_color": str(component.get("x-apple-calendar-color") or "#7dd3fc"),
+                        "calendar_name": feed_name_override or str(component.get("x-wr-calname") or url),
+                        "calendar_color": feed_color_override or str(component.get("x-apple-calendar-color") or "#7dd3fc"),
                         "status": str(component.get("status", "CONFIRMED")),
                         "recurrence_id": recurrence_id,
                     }
@@ -214,8 +255,8 @@ def fetch_ical_events(urls, window_start=None, window_end=None):
                     continue
                 event_end = _get_event_end(component, event_dt, is_dt)
                 exdates = _extract_exdates(component)
-                calendar_name = str(cal.get("x-wr-calname") or url)
-                calendar_color = str(cal.get("x-apple-calendar-color") or "#7dd3fc")
+                calendar_name = feed_name_override or str(cal.get("x-wr-calname") or url)
+                calendar_color = feed_color_override or str(cal.get("x-apple-calendar-color") or "#7dd3fc")
 
                 rrule_value = component.get("rrule")
                 if rrule_value:
@@ -310,6 +351,7 @@ class BaseWidget:
         self.last_updated = None
         self.last_refresh_started = None
         self.refresh_failures = 0
+        self.refresh_in_progress = False
         self.ticker_scroll_x = 0
         self.last_ticker_step_time = None
 
@@ -337,15 +379,21 @@ class BaseWidget:
 
         if is_ticker:
             new_ticker_text = "   |   ".join(decorated_text.split("\n")).strip()
-            if self.text != new_ticker_text:
-                self.ticker_scroll_x = 0.0
-                self.last_ticker_step_time = None
-                self.ticker_initialized = False
-            self.text = new_ticker_text
+            if app and hasattr(app, "queue_widget_text_update"):
+                app.queue_widget_text_update(self.widget_name, new_ticker_text, True)
+            else:
+                if self.text != new_ticker_text:
+                    self.ticker_scroll_x = 0.0
+                    self.last_ticker_step_time = None
+                    self.ticker_initialized = False
+                self.text = new_ticker_text
         else:
-            self.text = decorated_text
+            if app and hasattr(app, "queue_widget_text_update"):
+                app.queue_widget_text_update(self.widget_name, decorated_text, False)
+            else:
+                self.text = decorated_text
 
-        if app and hasattr(app, 'central_widget') and app.central_widget:
+        if app and not hasattr(app, "queue_widget_text_update") and hasattr(app, 'central_widget') and app.central_widget:
             app.central_widget.update()
 
     def set_error(self, err, app, prefix):
@@ -360,6 +408,22 @@ class BaseWidget:
 
     def begin_refresh(self):
         self.last_refresh_started = datetime.now()
+
+    def run_worker_update(self, app):
+        if self.refresh_in_progress:
+            return False
+        self.refresh_in_progress = True
+
+        def worker():
+            try:
+                self._update_text_worker(app)
+            finally:
+                self.refresh_in_progress = False
+
+        thread = threading.Thread(target=worker)
+        thread.daemon = True
+        thread.start()
+        return True
 
     def get_diagnostics(self):
         return {
@@ -540,9 +604,7 @@ class WeatherForecastWidget(BaseWidget):
             self.set_error("error", app, "Weather  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class CalendarWidget(BaseWidget):
@@ -565,7 +627,7 @@ class ICalWidget(BaseWidget):
     def _update_text_worker(self, app):
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-            ical_urls = collect_ical_urls(self.config, self.widget_name)
+            ical_feeds = collect_ical_feeds(self.config, self.widget_name)
             display_tz_str = widget_settings.get("timezone", "UTC")
             style = widget_settings.get("style", "Agenda")
             try:
@@ -573,7 +635,7 @@ class ICalWidget(BaseWidget):
             except pytz.exceptions.UnknownTimeZoneError:
                 display_tz = pytz.utc
 
-            if not ical_urls:
+            if not ical_feeds:
                 self.set_error("no urls", app, "Set iCal URLs in widget settings")
                 return
 
@@ -581,7 +643,7 @@ class ICalWidget(BaseWidget):
                 month_start = datetime.now(display_tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 next_month = (month_start + timedelta(days=32)).replace(day=1)
                 all_events, had_errors = fetch_ical_events(
-                    ical_urls,
+                    ical_feeds,
                     window_start=month_start.astimezone(pytz.utc),
                     window_end=next_month.astimezone(pytz.utc),
                 )
@@ -613,7 +675,7 @@ class ICalWidget(BaseWidget):
                 self.set_text(self.month_calendar_data["month_name"], app)
                 return
 
-            all_events, had_errors = fetch_ical_events(ical_urls)
+            all_events, had_errors = fetch_ical_events(ical_feeds)
 
             if not all_events and had_errors:
                 self.set_error("fetch", app, "iCal  Error")
@@ -637,9 +699,7 @@ class ICalWidget(BaseWidget):
             self.set_error("error", app, "iCal  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
     def draw(self, painter, app):
@@ -723,9 +783,7 @@ class CommuteWidget(BaseWidget):
             self.set_error("error", app, "Commute  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         # Keep this fresher than normal feeds so leave-time countdown feels live.
         self.update_timer = app.after(60000, lambda: self.update(app))
 
@@ -783,9 +841,7 @@ class DailyAgendaWidget(BaseWidget):
             self.set_error("error", app, "Agenda  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class PhotoMemoriesWidget(BaseWidget):
@@ -992,9 +1048,7 @@ class RssWidget(BaseWidget):
             self.set_error("error", app, "RSS  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class SportsWidget(BaseWidget):
@@ -1149,9 +1203,7 @@ class SportsWidget(BaseWidget):
         return None
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class StockWidget(BaseWidget):
@@ -1198,9 +1250,7 @@ class StockWidget(BaseWidget):
             self.set_error("error", app, "Stocks  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class HistoryWidget(BaseWidget):
@@ -1246,9 +1296,7 @@ class HistoryWidget(BaseWidget):
             self.set_error("error", app, "History  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class CountdownWidget(BaseWidget):
@@ -1425,9 +1473,7 @@ class FlightBoardWidget(BaseWidget):
             self.set_error("error", app, "Flight Board  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class EnergyPriceWidget(BaseWidget):
@@ -1470,9 +1516,7 @@ class EnergyPriceWidget(BaseWidget):
             self.set_error("error", app, "Energy Price  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class PackageWidget(BaseWidget):
@@ -1504,9 +1548,7 @@ class PackageWidget(BaseWidget):
             self.set_error("error", app, "Package  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class SunriseWidget(BaseWidget):
@@ -1548,9 +1590,7 @@ class SunriseWidget(BaseWidget):
             self.set_error("error", app, "Sunrise  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(900000, lambda: self.update(app))
 
 class AstronomyWidget(BaseWidget):
@@ -1614,9 +1654,7 @@ class AstronomyWidget(BaseWidget):
             self.set_error("error", app, "Astronomy  Error")
 
     def update(self, app):
-        thread = threading.Thread(target=self._update_text_worker, args=(app,))
-        thread.daemon = True
-        thread.start()
+        self.run_worker_update(app)
         self.update_timer = app.after(3600000, lambda: self.update(app))
 
 WIDGET_CLASSES = {
@@ -1654,6 +1692,7 @@ class WidgetManager:
         self.load_widgets()
 
     def load_widgets(self):
+        self.stop_updates()
         self.widgets = {}
         active = list(self.config.get("widget_positions", {}).keys())
 

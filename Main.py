@@ -1,19 +1,22 @@
 import sys
 import json
 import os
+import secrets
+import shutil
 import subprocess
 import tempfile
 import time
+import threading
 from datetime import datetime, date
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QSlider, QColorDialog,
     QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
-    QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox
+    QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QPlainTextEdit
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
-from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal, QUrl
+from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal, QUrl, QThread
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import cv2
 import pytz
@@ -96,6 +99,83 @@ WIDGET_DISPLAY_NAMES = {
     "astronomy": "Astronomy",
 }
 
+WIDGET_DEFAULT_SETTINGS = {
+    "ical": {"feeds": [], "timezone": "US/Central", "style": "Agenda", "day_event_limit": 2},
+    "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
+    "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
+    "photomemories": {
+        "source_mode": "folder",
+        "single_file": "",
+        "folder": "",
+        "refresh_minutes": 60,
+        "max_name_chars": 45,
+        "image_scale": 0.35,
+    },
+    "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5, "ticker_speed": 2},
+    "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
+    "worldclock": {"timezone": "UTC"},
+    "sports": {"configs": [], "style": "Normal", "timezone": "UTC", "ticker_speed": 2},
+    "stock": {"symbols": ["AAPL", "GOOG"], "api_key": "", "style": "Normal", "ticker_speed": 2},
+    "date": {"format": "%A, %B %d, %Y"},
+    "countdown": {"name": "New Event", "datetime": ""},
+    "history": {"max_width_chars": 50},
+    "flightboard": {"flight_number": "", "api_key": ""},
+    "energyprice": {"mode": "manual", "manual_price": 0.12, "currency_symbol": "$", "unit": "kWh", "price_url": "", "json_key": ""},
+    "package": {"company": "ups", "tracking_number": "", "api_key": ""},
+    "sunrise": {"lat": 38.624, "lon": -90.184},
+    "sunrisesunset": {"lat": 38.624, "lon": -90.184},
+    "astronomy": {"lat": 38.624, "lon": -90.184},
+}
+
+WIDGET_REQUIRED_SETTINGS = {
+    "ical": ["feeds"],
+    "rss": ["urls"],
+    "commute": ["urls"],
+    "dailyagenda": ["urls"],
+    "stock": ["api_key"],
+    "flightboard": ["flight_number", "api_key"],
+    "package": ["company", "tracking_number", "api_key"],
+    "photomemories": ["folder"],
+}
+
+WIDGET_CATEGORIES = {
+    "time": "Core",
+    "date": "Core",
+    "calendar": "Calendar",
+    "ical": "Calendar",
+    "dailyagenda": "Calendar",
+    "commute": "Calendar",
+    "weatherforecast": "Weather",
+    "sunrise": "Weather",
+    "sunrisesunset": "Weather",
+    "astronomy": "Weather",
+    "moon": "Weather",
+    "rss": "Feeds",
+    "history": "Feeds",
+    "quotes": "Feeds",
+    "sports": "Feeds",
+    "stock": "Finance",
+    "energyprice": "Finance",
+    "worldclock": "Core",
+    "countdown": "Core",
+    "system": "System",
+    "ip": "System",
+    "photomemories": "Media",
+    "flightboard": "Travel",
+    "package": "Travel",
+}
+
+WIDGET_REGISTRY = {
+    widget_type: {
+        "display_name": WIDGET_DISPLAY_NAMES.get(widget_type, widget_type.replace("_", " ").title()),
+        "category": WIDGET_CATEGORIES.get(widget_type, "Other"),
+        "default_settings": WIDGET_DEFAULT_SETTINGS.get(widget_type, {}),
+        "required_settings": WIDGET_REQUIRED_SETTINGS.get(widget_type, []),
+        "supports_ticker": widget_type in {"rss", "sports", "stock"},
+    }
+    for widget_type in WIDGET_DISPLAY_NAMES
+}
+
 def format_widget_display_name(widget_name):
     if not widget_name:
         return ""
@@ -106,6 +186,13 @@ def format_widget_display_name(widget_name):
     return widget_name.replace("_", " ").title()
 
 DEFAULT_LAYOUT_PAGES = ["default", "morning", "evening", "work", "photo-frame"]
+DEFAULT_SCENE_SCHEDULE = [
+    {"name": "Morning", "enabled": False, "start_time": "06:00", "end_time": "09:00", "days": [], "page": "morning", "low_power_mode": False},
+    {"name": "Work", "enabled": False, "start_time": "09:00", "end_time": "17:00", "days": ["Mon", "Tue", "Wed", "Thu", "Fri"], "page": "work", "low_power_mode": False},
+    {"name": "Evening", "enabled": False, "start_time": "17:00", "end_time": "22:00", "days": [], "page": "evening", "low_power_mode": False},
+    {"name": "Night", "enabled": False, "start_time": "22:00", "end_time": "06:00", "days": [], "page": "photo-frame", "low_power_mode": True},
+]
+MAX_CONFIG_BACKUPS = 10
 
 
 def default_visibility_rules():
@@ -518,6 +605,11 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self.appearance_tab, "Appearance")
         self.setup_appearance_tab()
 
+        self.pages_tab = QWidget()
+        self.pages_layout = QVBoxLayout(self.pages_tab)
+        self.tabs.addTab(self.pages_tab, "Pages")
+        self.setup_pages_tab()
+
         self.widget_tab = QWidget()
         self.widget_layout = QVBoxLayout(self.widget_tab)
         self.tabs.addTab(self.widget_tab, "Widgets")
@@ -691,13 +783,6 @@ class SettingsDialog(QDialog):
         self.snap_check.stateChanged.connect(self.live_update_snap_to_grid)
         sys_layout.addRow("", self.snap_check)
 
-        self.active_page_combo = QComboBox()
-        self.active_page_combo.setEditable(True)
-        self.active_page_combo.addItems(self.parent.get_layout_pages())
-        self.active_page_combo.setCurrentText(self.config.get("active_page", "default"))
-        self.active_page_combo.currentTextChanged.connect(self.live_update_active_page)
-        sys_layout.addRow("Active Page:", self.active_page_combo)
-
         layout.addWidget(sys_group)
 
         # Profiles / Backup Group
@@ -782,6 +867,161 @@ class SettingsDialog(QDialog):
         theme_layout.addRow("Readability Preset:", self.accessibility_combo)
         layout.addWidget(theme_group)
         layout.addStretch()
+
+    def setup_pages_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        self.pages_layout.addWidget(scroll)
+
+        page_group = QGroupBox("Pages")
+        page_layout = QVBoxLayout(page_group)
+        active_row = QHBoxLayout()
+        active_row.addWidget(QLabel("Active Page:"))
+        self.active_page_combo = QComboBox()
+        self.active_page_combo.setEditable(True)
+        self.active_page_combo.currentTextChanged.connect(self.live_update_active_page)
+        active_row.addWidget(self.active_page_combo, 1)
+        page_layout.addLayout(active_row)
+
+        self.page_list = QListWidget()
+        self.page_list.currentItemChanged.connect(self.update_page_detail)
+        page_layout.addWidget(self.page_list)
+
+        page_btn_row = QHBoxLayout()
+        self.set_active_page_btn = QPushButton("Set Active")
+        self.set_active_page_btn.clicked.connect(self.set_selected_page_active)
+        page_btn_row.addWidget(self.set_active_page_btn)
+        self.add_page_btn = QPushButton("Add Page")
+        self.add_page_btn.clicked.connect(self.add_page)
+        page_btn_row.addWidget(self.add_page_btn)
+        self.remove_page_btn = QPushButton("Remove Page")
+        self.remove_page_btn.clicked.connect(self.remove_selected_page)
+        page_btn_row.addWidget(self.remove_page_btn)
+        page_layout.addLayout(page_btn_row)
+        layout.addWidget(page_group)
+
+        group_group = QGroupBox("Widget Groups")
+        group_layout = QVBoxLayout(group_group)
+        self.group_list = QListWidget()
+        group_layout.addWidget(self.group_list)
+        group_btn_row = QHBoxLayout()
+        self.move_group_btn = QPushButton("Move Group to Active Page")
+        self.move_group_btn.clicked.connect(self.move_selected_group_to_active_page)
+        group_btn_row.addWidget(self.move_group_btn)
+        group_layout.addLayout(group_btn_row)
+        layout.addWidget(group_group)
+
+        template_group = QGroupBox("Page Templates")
+        template_group_layout = QVBoxLayout(template_group)
+
+        template_row = QHBoxLayout()
+        self.template_combo = QComboBox()
+        template_row.addWidget(self.template_combo, 1)
+        self.apply_template_btn = QPushButton("Apply Template")
+        self.apply_template_btn.clicked.connect(self.apply_selected_template)
+        template_row.addWidget(self.apply_template_btn)
+        template_group_layout.addLayout(template_row)
+
+        save_template_row = QHBoxLayout()
+        self.save_template_btn = QPushButton("Save Current as Template")
+        self.save_template_btn.clicked.connect(self.save_current_as_template)
+        save_template_row.addWidget(self.save_template_btn)
+        self.remove_template_btn = QPushButton("Remove Template")
+        self.remove_template_btn.clicked.connect(self.remove_selected_template)
+        save_template_row.addWidget(self.remove_template_btn)
+        template_group_layout.addLayout(save_template_row)
+        layout.addWidget(template_group)
+
+        scene_group = QGroupBox("Scene Scheduler")
+        scene_layout = QVBoxLayout(scene_group)
+        self.scene_schedule_check = QCheckBox("Enable Scene Scheduler")
+        self.scene_schedule_check.setChecked(self.config.get("scene_schedule_enabled", False))
+        self.scene_schedule_check.stateChanged.connect(self.live_update_scene_schedule_enabled)
+        scene_layout.addWidget(self.scene_schedule_check)
+        self.scene_rule_list = QListWidget()
+        self.scene_rule_list.currentItemChanged.connect(self.populate_scene_rule_form)
+        scene_layout.addWidget(self.scene_rule_list)
+
+        scene_form_group = QGroupBox("Selected Rule")
+        scene_form_layout = QFormLayout(scene_form_group)
+        self.scene_rule_enabled_check = QCheckBox("Enabled")
+        scene_form_layout.addRow("", self.scene_rule_enabled_check)
+        self.scene_rule_name_input = QLineEdit()
+        scene_form_layout.addRow("Name:", self.scene_rule_name_input)
+        time_row = QHBoxLayout()
+        self.scene_rule_start_combo = QComboBox()
+        self.scene_rule_start_combo.setEditable(True)
+        self.scene_rule_end_combo = QComboBox()
+        self.scene_rule_end_combo.setEditable(True)
+        for combo in (self.scene_rule_start_combo, self.scene_rule_end_combo):
+            combo.addItems([f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 15, 30, 45)])
+        time_row.addWidget(self.scene_rule_start_combo)
+        time_row.addWidget(QLabel("to"))
+        time_row.addWidget(self.scene_rule_end_combo)
+        scene_form_layout.addRow("Time:", time_row)
+        days_widget = QWidget()
+        days_layout = QHBoxLayout(days_widget)
+        days_layout.setContentsMargins(0, 0, 0, 0)
+        self.scene_day_checks = []
+        for day in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"):
+            check = QCheckBox(day)
+            self.scene_day_checks.append(check)
+            days_layout.addWidget(check)
+        scene_form_layout.addRow("Days:", days_widget)
+        self.scene_rule_page_combo = QComboBox()
+        self.scene_rule_page_combo.setEditable(True)
+        scene_form_layout.addRow("Page:", self.scene_rule_page_combo)
+        self.scene_rule_low_power_check = QCheckBox("Use low power mode")
+        scene_form_layout.addRow("", self.scene_rule_low_power_check)
+        scene_form_btn_row = QHBoxLayout()
+        self.save_scene_rule_btn = QPushButton("Save Rule")
+        self.save_scene_rule_btn.clicked.connect(self.save_selected_scene_rule_form)
+        scene_form_btn_row.addWidget(self.save_scene_rule_btn)
+        self.add_scene_rule_btn = QPushButton("Add Rule")
+        self.add_scene_rule_btn.clicked.connect(self.add_scene_rule)
+        scene_form_btn_row.addWidget(self.add_scene_rule_btn)
+        self.remove_scene_rule_btn = QPushButton("Remove Rule")
+        self.remove_scene_rule_btn.clicked.connect(self.remove_selected_scene_rule)
+        scene_form_btn_row.addWidget(self.remove_scene_rule_btn)
+        scene_form_layout.addRow("", scene_form_btn_row)
+        scene_layout.addWidget(scene_form_group)
+
+        scene_quick_btn_row = QHBoxLayout()
+        self.scene_rule_active_page_btn = QPushButton("Use Active Page")
+        self.scene_rule_active_page_btn.clicked.connect(self.set_selected_scene_rule_to_active_page)
+        scene_quick_btn_row.addWidget(self.scene_rule_active_page_btn)
+        scene_layout.addLayout(scene_quick_btn_row)
+        self.scene_schedule_editor = QPlainTextEdit()
+        self.scene_schedule_editor.setPlainText(json.dumps(self.config.get("scene_schedule", DEFAULT_SCENE_SCHEDULE), indent=2))
+        self.scene_schedule_editor.setMinimumHeight(170)
+        self.scene_schedule_editor.setVisible(False)
+        scene_layout.addWidget(self.scene_schedule_editor)
+        scene_btn_row = QHBoxLayout()
+        self.toggle_advanced_schedule_btn = QPushButton("Show Advanced JSON")
+        self.toggle_advanced_schedule_btn.clicked.connect(self.toggle_scene_schedule_json)
+        scene_btn_row.addWidget(self.toggle_advanced_schedule_btn)
+        self.apply_scene_schedule_btn = QPushButton("Apply JSON")
+        self.apply_scene_schedule_btn.clicked.connect(self.apply_scene_schedule_editor)
+        self.apply_scene_schedule_btn.setVisible(False)
+        scene_btn_row.addWidget(self.apply_scene_schedule_btn)
+        self.reset_scene_schedule_btn = QPushButton("Reset Defaults")
+        self.reset_scene_schedule_btn.clicked.connect(self.reset_scene_schedule_defaults)
+        scene_btn_row.addWidget(self.reset_scene_schedule_btn)
+        scene_layout.addLayout(scene_btn_row)
+        layout.addWidget(scene_group)
+
+        self.page_detail_label = QLabel()
+        self.page_detail_label.setWordWrap(True)
+        layout.addWidget(self.page_detail_label)
+        layout.addStretch()
+
+        self.refresh_page_manager()
+        self.refresh_template_choices()
+        self.refresh_scene_rule_list()
 
     def setup_diagnostics_tab(self):
         scroll = QScrollArea()
@@ -1014,7 +1254,294 @@ class SettingsDialog(QDialog):
         self.config["active_page"] = page
         if page not in self.config.get("layout_pages", []):
             self.config.setdefault("layout_pages", []).append(page)
+        if hasattr(self, "page_list"):
+            self.refresh_page_manager(select_page=page)
         self.parent.central_widget.update()
+
+    def refresh_page_manager(self, select_page=None):
+        if not hasattr(self, "page_list"):
+            return
+        pages = self.parent.get_layout_pages()
+        active_page = self.config.get("active_page", "default")
+        select_page = select_page or active_page
+
+        self.active_page_combo.blockSignals(True)
+        self.active_page_combo.clear()
+        self.active_page_combo.addItems(pages)
+        self.active_page_combo.setCurrentText(active_page)
+        self.active_page_combo.blockSignals(False)
+
+        self.page_list.blockSignals(True)
+        self.page_list.clear()
+        for page in pages:
+            count = sum(1 for name in self.config.get("widget_positions", {}) if self.parent.get_widget_layout(name).get("page", "default") == page)
+            suffix = " active" if page == active_page else ""
+            item = QListWidgetItem(f"{page} ({count} widgets){suffix}")
+            item.setData(Qt.ItemDataRole.UserRole, page)
+            self.page_list.addItem(item)
+            if page == select_page:
+                self.page_list.setCurrentItem(item)
+        self.page_list.blockSignals(False)
+
+        self.group_list.clear()
+        groups = {}
+        for name, layout in self.config.get("widget_positions", {}).items():
+            group = (layout.get("group") or "").strip()
+            if not group:
+                continue
+            groups.setdefault(group, []).append(name)
+        for group, widget_names in sorted(groups.items()):
+            pages_for_group = sorted({self.parent.get_widget_layout(name).get("page", "default") for name in widget_names})
+            item = QListWidgetItem(f"{group} ({len(widget_names)} widgets, {', '.join(pages_for_group)})")
+            item.setData(Qt.ItemDataRole.UserRole, group)
+            self.group_list.addItem(item)
+
+        self.update_page_detail()
+        self.refresh_scene_rule_list()
+
+    def refresh_scene_rule_list(self):
+        if not hasattr(self, "scene_rule_list"):
+            return
+        current_row = self.scene_rule_list.currentRow()
+        self.scene_rule_list.blockSignals(True)
+        self.scene_rule_list.clear()
+        for index, rule in enumerate(self.config.get("scene_schedule", [])):
+            enabled = "Enabled" if rule.get("enabled") else "Paused"
+            days = ", ".join(rule.get("days") or []) or "Every day"
+            text = (
+                f"{rule.get('name', 'Scene')} - {enabled} - "
+                f"{rule.get('start_time', '')} to {rule.get('end_time', '')} - "
+                f"{days} - {rule.get('page', 'default')}"
+            )
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            self.scene_rule_list.addItem(item)
+        self.scene_rule_list.blockSignals(False)
+        if self.scene_rule_list.count():
+            self.scene_rule_list.setCurrentRow(max(0, min(current_row, self.scene_rule_list.count() - 1)))
+        self.populate_scene_rule_form()
+
+    def selected_scene_rule_index(self):
+        if not hasattr(self, "scene_rule_list") or not self.scene_rule_list.currentItem():
+            return None
+        return self.scene_rule_list.currentItem().data(Qt.ItemDataRole.UserRole)
+
+    def sync_scene_editor_from_config(self):
+        if hasattr(self, "scene_schedule_editor"):
+            self.scene_schedule_editor.setPlainText(json.dumps(self.config.get("scene_schedule", []), indent=2))
+        self.refresh_scene_rule_list()
+
+    def populate_scene_rule_form(self, *args):
+        index = self.selected_scene_rule_index()
+        if index is None:
+            return
+        schedule = self.config.get("scene_schedule", [])
+        if not (0 <= index < len(schedule)):
+            return
+        rule = schedule[index]
+        self.scene_rule_enabled_check.setChecked(bool(rule.get("enabled")))
+        self.scene_rule_name_input.setText(rule.get("name", "Scene"))
+        self.scene_rule_start_combo.setCurrentText(rule.get("start_time", "06:00"))
+        self.scene_rule_end_combo.setCurrentText(rule.get("end_time", "09:00"))
+        selected_days = {str(day).strip().lower()[:3] for day in rule.get("days", [])}
+        for check in self.scene_day_checks:
+            check.setChecked(check.text().lower()[:3] in selected_days)
+        self.scene_rule_page_combo.blockSignals(True)
+        current_page = rule.get("page", "default")
+        self.scene_rule_page_combo.clear()
+        self.scene_rule_page_combo.addItems(self.parent.get_layout_pages())
+        self.scene_rule_page_combo.setCurrentText(current_page)
+        self.scene_rule_page_combo.blockSignals(False)
+        self.scene_rule_low_power_check.setChecked(bool(rule.get("low_power_mode")))
+
+    def read_scene_rule_form(self):
+        return {
+            "name": (self.scene_rule_name_input.text() or "Scene").strip() or "Scene",
+            "enabled": self.scene_rule_enabled_check.isChecked(),
+            "start_time": self.scene_rule_start_combo.currentText().strip(),
+            "end_time": self.scene_rule_end_combo.currentText().strip(),
+            "days": [check.text() for check in self.scene_day_checks if check.isChecked()],
+            "page": (self.scene_rule_page_combo.currentText() or "default").strip() or "default",
+            "low_power_mode": self.scene_rule_low_power_check.isChecked(),
+        }
+
+    def save_selected_scene_rule_form(self):
+        index = self.selected_scene_rule_index()
+        if index is None:
+            return
+        schedule = self.config.get("scene_schedule", [])
+        if 0 <= index < len(schedule):
+            schedule[index] = self.read_scene_rule_form()
+            self.config["scene_schedule"] = schedule
+            self.parent.migrate_config_schema()
+            self.sync_scene_editor_from_config()
+            self.parent.apply_scene_schedule()
+            self.parent.save_config()
+            self.refresh_diagnostics()
+
+    def add_scene_rule(self):
+        schedule = self.config.setdefault("scene_schedule", [])
+        new_rule = self.read_scene_rule_form() if self.selected_scene_rule_index() is not None else {
+            "name": "New Scene",
+            "enabled": False,
+            "start_time": "08:00",
+            "end_time": "17:00",
+            "days": [],
+            "page": self.config.get("active_page", "default"),
+            "low_power_mode": False,
+        }
+        new_rule["name"] = "New Scene"
+        new_rule["enabled"] = False
+        schedule.append(new_rule)
+        self.config["scene_schedule"] = schedule
+        self.parent.migrate_config_schema()
+        self.sync_scene_editor_from_config()
+        self.scene_rule_list.setCurrentRow(self.scene_rule_list.count() - 1)
+        self.parent.save_config()
+
+    def remove_selected_scene_rule(self):
+        index = self.selected_scene_rule_index()
+        if index is None:
+            return
+        schedule = self.config.get("scene_schedule", [])
+        if 0 <= index < len(schedule):
+            schedule.pop(index)
+            self.config["scene_schedule"] = schedule
+            self.parent.migrate_config_schema()
+            self.sync_scene_editor_from_config()
+            self.parent.apply_scene_schedule()
+            self.parent.save_config()
+            self.refresh_diagnostics()
+
+    def set_selected_scene_rule_to_active_page(self):
+        index = self.selected_scene_rule_index()
+        if index is None:
+            return
+        schedule = self.config.get("scene_schedule", [])
+        if 0 <= index < len(schedule):
+            schedule[index]["page"] = self.config.get("active_page", "default")
+            self.config["scene_schedule"] = schedule
+            self.sync_scene_editor_from_config()
+            self.populate_scene_rule_form()
+            self.parent.save_config()
+
+    def toggle_scene_schedule_json(self):
+        visible = not self.scene_schedule_editor.isVisible()
+        self.scene_schedule_editor.setVisible(visible)
+        self.apply_scene_schedule_btn.setVisible(visible)
+        self.toggle_advanced_schedule_btn.setText("Hide Advanced JSON" if visible else "Show Advanced JSON")
+
+    def update_page_detail(self):
+        if not hasattr(self, "page_detail_label"):
+            return
+        page = self.page_list.currentItem().data(Qt.ItemDataRole.UserRole) if self.page_list.currentItem() else self.config.get("active_page", "default")
+        widgets = [
+            name for name in self.parent.get_sorted_widget_names()
+            if self.parent.get_widget_layout(name).get("page", "default") == page
+        ]
+        groups = sorted({
+            (self.parent.get_widget_layout(name).get("group") or "").strip()
+            for name in widgets
+            if (self.parent.get_widget_layout(name).get("group") or "").strip()
+        })
+        self.page_detail_label.setText(
+            f"Selected Page: {page}\n"
+            f"Widgets: {len(widgets)}\n"
+            f"Groups: {', '.join(groups) if groups else 'none'}"
+        )
+
+    def add_page(self):
+        name, ok = QInputDialog.getText(self, "Add Page", "Page name:")
+        if not ok:
+            return
+        page = (name or "").strip()
+        if not page:
+            return
+        if page not in self.config.get("layout_pages", []):
+            self.config.setdefault("layout_pages", []).append(page)
+        self.config["active_page"] = page
+        self.refresh_page_manager(select_page=page)
+        self.parent.central_widget.update()
+        self.parent.save_config()
+
+    def remove_selected_page(self):
+        item = self.page_list.currentItem() if hasattr(self, "page_list") else None
+        page = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if not page or page == "default":
+            QMessageBox.information(self, "Pages", "The default page cannot be removed.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Remove Page",
+            f"Remove page '{page}'? Widgets on this page will move to default.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        for layout in self.config.get("widget_positions", {}).values():
+            if layout.get("page", "default") == page:
+                layout["page"] = "default"
+        self.config["layout_pages"] = [p for p in self.config.get("layout_pages", []) if p != page]
+        if self.config.get("active_page") == page:
+            self.config["active_page"] = "default"
+        self.refresh_page_manager(select_page="default")
+        self.refresh_widget_list()
+        self.parent.central_widget.update()
+        self.parent.save_config()
+
+    def set_selected_page_active(self):
+        item = self.page_list.currentItem() if hasattr(self, "page_list") else None
+        if not item:
+            return
+        page = item.data(Qt.ItemDataRole.UserRole)
+        self.live_update_active_page(page)
+        self.active_page_combo.blockSignals(True)
+        self.active_page_combo.setCurrentText(page)
+        self.active_page_combo.blockSignals(False)
+
+    def move_selected_group_to_active_page(self):
+        item = self.group_list.currentItem() if hasattr(self, "group_list") else None
+        if not item:
+            return
+        group = item.data(Qt.ItemDataRole.UserRole)
+        active_page = self.config.get("active_page", "default")
+        moved = 0
+        for layout in self.config.get("widget_positions", {}).values():
+            if (layout.get("group") or "").strip() == group:
+                layout["page"] = active_page
+                moved += 1
+        if moved:
+            self.refresh_page_manager()
+            self.refresh_widget_list()
+            self.parent.central_widget.update()
+            self.parent.save_config()
+
+    def live_update_scene_schedule_enabled(self, state):
+        self.config["scene_schedule_enabled"] = self.scene_schedule_check.isChecked()
+        self.parent.apply_scene_schedule()
+        self.refresh_diagnostics()
+
+    def apply_scene_schedule_editor(self):
+        try:
+            schedule = json.loads(self.scene_schedule_editor.toPlainText() or "[]")
+            if not isinstance(schedule, list):
+                raise ValueError("Scene schedule must be a JSON list")
+            self.config["scene_schedule"] = schedule
+            self.parent.migrate_config_schema()
+            self.sync_scene_editor_from_config()
+            self.parent.apply_scene_schedule()
+            self.parent.save_config()
+            self.refresh_page_manager()
+            self.refresh_diagnostics()
+            QMessageBox.information(self, "Scene Scheduler", "Scene schedule updated.")
+        except Exception as e:
+            QMessageBox.warning(self, "Scene Scheduler Error", f"Could not apply schedule:\n{e}")
+
+    def reset_scene_schedule_defaults(self):
+        self.config["scene_schedule"] = json.loads(json.dumps(DEFAULT_SCENE_SCHEDULE))
+        self.sync_scene_editor_from_config()
+        self.parent.save_config()
+        self.refresh_page_manager()
 
     def _profiles_dir(self):
         return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "profiles")
@@ -1058,6 +1585,7 @@ class SettingsDialog(QDialog):
             self.parent.restart_camera()
             self.parent.central_widget.update()
             self.profile_name_input.setText(self.parent.config.get("active_profile_name", os.path.splitext(os.path.basename(path))[0]))
+            self.refresh_page_manager()
             self.refresh_widget_list()
             self.refresh_diagnostics()
             QMessageBox.information(self, "Profile Loaded", f"Loaded: {os.path.basename(path)}")
@@ -1096,6 +1624,8 @@ class SettingsDialog(QDialog):
             f"Low Power Mode: {'ON' if low else 'OFF'}",
             f"Render Path: {self.parent.media_backend_name.upper()}",
             f"Active Page: {self.config.get('active_page', 'default')}",
+            f"Current Scene: {self.parent.current_scene_name or 'none'}",
+            f"Scene Scheduler: {'ON' if self.config.get('scene_schedule_enabled') else 'OFF'}",
             f"Web Management: {'ON' if self.config.get('web_server_enabled') else 'OFF'}",
             "",
             "Per-widget diagnostics:",
@@ -1153,30 +1683,6 @@ class SettingsDialog(QDialog):
         controls_layout.addWidget(self.widget_search)
         self.filter_widget_types("")
 
-        # Templates Group
-        template_group = QGroupBox("Templates")
-        template_group_layout = QVBoxLayout(template_group)
-
-        template_row = QHBoxLayout()
-        self.template_combo = QComboBox()
-        self.refresh_template_choices()
-        template_row.addWidget(self.template_combo, 1)
-        self.apply_template_btn = QPushButton("Apply Template")
-        self.apply_template_btn.clicked.connect(self.apply_selected_template)
-        template_row.addWidget(self.apply_template_btn)
-        template_group_layout.addLayout(template_row)
-
-        save_template_row = QHBoxLayout()
-        self.save_template_btn = QPushButton("Save Current as Template")
-        self.save_template_btn.clicked.connect(self.save_current_as_template)
-        save_template_row.addWidget(self.save_template_btn)
-        self.remove_template_btn = QPushButton("Remove Template")
-        self.remove_template_btn.clicked.connect(self.remove_selected_template)
-        save_template_row.addWidget(self.remove_template_btn)
-        template_group_layout.addLayout(save_template_row)
-
-        controls_layout.addWidget(template_group)
-        
         left_layout.addWidget(controls_group)
         splitter.addWidget(left_widget)
 
@@ -1234,6 +1740,7 @@ class SettingsDialog(QDialog):
         widget_name = self.parent.add_widget_by_type(widget_type)
         if not widget_name:
             return
+        self.refresh_page_manager()
         self.refresh_widget_list()
         for i in range(self.widget_list.count()):
             it = self.widget_list.item(i)
@@ -1251,10 +1758,14 @@ class SettingsDialog(QDialog):
             ]
         self.widget_combo.clear()
         for widget_type in visible_widget_types:
-            self.widget_combo.addItem(WIDGET_DISPLAY_NAMES.get(widget_type, widget_type.replace("_", " ").title()), widget_type)
+            meta = WIDGET_REGISTRY.get(widget_type, {})
+            label = meta.get("display_name", WIDGET_DISPLAY_NAMES.get(widget_type, widget_type.replace("_", " ").title()))
+            category = meta.get("category", "Other")
+            self.widget_combo.addItem(f"{label} - {category}", widget_type)
 
     def apply_selected_template(self):
         self.parent.apply_template(self.template_combo.currentText())
+        self.refresh_page_manager()
         self.refresh_widget_list()
 
     def refresh_template_choices(self):
@@ -1272,6 +1783,7 @@ class SettingsDialog(QDialog):
             return
         safe = self.parent.save_current_as_template(name.strip())
         self.refresh_template_choices()
+        self.refresh_page_manager()
         idx = self.template_combo.findText(safe)
         if idx >= 0:
             self.template_combo.setCurrentIndex(idx)
@@ -1292,6 +1804,7 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Template", f"Could not remove template: {name}")
             return
         self.refresh_template_choices()
+        self.refresh_page_manager()
 
     def remove_widget(self):
         current_item = self.widget_list.currentItem()
@@ -1300,6 +1813,7 @@ class SettingsDialog(QDialog):
             return
         widget_name = current_item.data(Qt.ItemDataRole.UserRole)
         if self.parent.remove_widget_by_name(widget_name, confirm=True):
+            self.refresh_page_manager()
             self.refresh_widget_list()
             # Clear settings area
             new_container = QWidget()
@@ -1332,6 +1846,8 @@ class SettingsDialog(QDialog):
             self.widget_settings_area.setProperty("current_widget", new_name)
             self.settings_title.setText(f"Settings: {format_widget_display_name(new_name)}")
             self.parent.widget_manager.load_widgets()
+            self.parent.save_config()
+            self.refresh_page_manager()
             self.refresh_widget_list()
             for i in range(self.widget_list.count()):
                 it = self.widget_list.item(i)
@@ -1350,6 +1866,127 @@ class SettingsDialog(QDialog):
     def remove_list_item(self, list_widget):
         list_widget.takeItem(list_widget.currentRow())
         self.save_current_widget_ui_to_config()
+
+    def get_ical_feed_settings(self, settings):
+        feeds = settings.get("feeds")
+        if feeds is None:
+            feeds = settings.get("urls", [])
+        normalized = []
+        for entry in feeds or []:
+            if isinstance(entry, str):
+                url = entry.strip()
+                if url:
+                    normalized.append({"url": url, "name": "", "color": ""})
+                continue
+            if not isinstance(entry, dict):
+                continue
+            url = str(entry.get("url", "")).strip()
+            if not url:
+                continue
+            normalized.append({
+                "url": url,
+                "name": str(entry.get("name", "")).strip(),
+                "color": "" if str(entry.get("color", "")).strip().lower() == "default" else str(entry.get("color", "")).strip(),
+            })
+        return normalized
+
+    def refresh_ical_feed_row_titles(self, container):
+        if not container or not container.layout():
+            return
+        visible_index = 1
+        for i in range(container.layout().count()):
+            row = container.layout().itemAt(i).widget()
+            if isinstance(row, QGroupBox):
+                row.setTitle(f"Feed {visible_index}")
+                visible_index += 1
+
+    def update_ical_feed_color_ui(self, row):
+        mode_combo = row.findChild(QComboBox, "feed_color_mode_combo")
+        color_button = row.findChild(QPushButton, "feed_color_button")
+        preview = row.findChild(QLabel, "feed_color_preview")
+        if not mode_combo or not color_button or not preview:
+            return
+        use_custom = mode_combo.currentText() == "Custom Color"
+        color_value = row.property("feed_color") or ""
+        color_button.setEnabled(use_custom)
+        if use_custom and color_value:
+            preview.setText(color_value.upper())
+            preview.setStyleSheet(f"background:{color_value}; color:#fff; padding:4px 8px; border-radius:4px;")
+        elif use_custom:
+            preview.setText("No color selected")
+            preview.setStyleSheet("background:#444; color:#fff; padding:4px 8px; border-radius:4px;")
+        else:
+            preview.setText("Feed default")
+            preview.setStyleSheet("background:#2f2f2f; color:#ddd; padding:4px 8px; border-radius:4px;")
+
+    def choose_ical_feed_color(self, row):
+        current = row.property("feed_color") or "#7dd3fc"
+        color = QColorDialog.getColor(QColor(current), self)
+        if not color.isValid():
+            return
+        row.setProperty("feed_color", color.name())
+        self.update_ical_feed_color_ui(row)
+        self.save_current_widget_ui_to_config()
+
+    def remove_ical_feed_row(self, container, row):
+        if not container or not container.layout() or not row:
+            return
+        container.layout().removeWidget(row)
+        row.deleteLater()
+        self.refresh_ical_feed_row_titles(container)
+        self.save_current_widget_ui_to_config()
+
+    def add_ical_feed_row(self, container, feed=None):
+        feed = feed or {"url": "", "name": "", "color": ""}
+        row = QGroupBox()
+        row.setProperty("feed_color", feed.get("color", ""))
+        layout = QVBoxLayout(row)
+
+        name_entry = QLineEdit()
+        name_entry.setObjectName("feed_name_entry")
+        name_entry.setPlaceholderText("Display name")
+        name_entry.setText(feed.get("name", ""))
+        name_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        layout.addWidget(QLabel("Feed Name (optional):"))
+        layout.addWidget(name_entry)
+
+        url_entry = QLineEdit()
+        url_entry.setObjectName("feed_url_entry")
+        url_entry.setPlaceholderText("https://example.com/calendar.ics")
+        url_entry.setText(feed.get("url", ""))
+        url_entry.textChanged.connect(self.save_current_widget_ui_to_config)
+        layout.addWidget(QLabel("Feed URL:"))
+        layout.addWidget(url_entry)
+
+        color_mode = QComboBox()
+        color_mode.setObjectName("feed_color_mode_combo")
+        color_mode.addItems(["Default Color", "Custom Color"])
+        color_mode.setCurrentText("Custom Color" if feed.get("color") else "Default Color")
+        color_mode.currentTextChanged.connect(lambda *_: self.update_ical_feed_color_ui(row))
+        color_mode.currentTextChanged.connect(self.save_current_widget_ui_to_config)
+
+        color_button = QPushButton("Choose Color")
+        color_button.setObjectName("feed_color_button")
+        color_button.clicked.connect(lambda: self.choose_ical_feed_color(row))
+
+        preview = QLabel()
+        preview.setObjectName("feed_color_preview")
+
+        color_row = QHBoxLayout()
+        color_row.addWidget(color_mode)
+        color_row.addWidget(color_button)
+        color_row.addWidget(preview)
+        layout.addWidget(QLabel("Calendar Color:"))
+        layout.addLayout(color_row)
+
+        remove_button = QPushButton("Remove Feed")
+        remove_button.clicked.connect(lambda: self.remove_ical_feed_row(container, row))
+        layout.addWidget(remove_button)
+
+        container.layout().addWidget(row)
+        self.refresh_ical_feed_row_titles(container)
+        self.update_ical_feed_color_ui(row)
+        return row
 
     def add_sport_config(self, list_widget, league_input, teams_input):
         l = league_input.text()
@@ -1533,20 +2170,19 @@ class SettingsDialog(QDialog):
             combo.setCurrentText(settings.get("style", "Agenda"))
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Style:", combo)
-            
-            list_widget = QListWidget(); list_widget.setObjectName("url_list")
-            for url in settings.get("urls", []):
-                item = QListWidgetItem(url)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                list_widget.addItem(item)
-            list_widget.itemChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("iCal URLs:", list_widget)
-            
-            btn_layout = QHBoxLayout()
-            add_btn = QPushButton("+"); add_btn.clicked.connect(lambda: self.add_list_item(list_widget))
-            rem_btn = QPushButton("-"); rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
-            btn_layout.addWidget(add_btn); btn_layout.addWidget(rem_btn)
-            self.widget_settings_layout.addLayout(btn_layout)
+
+            feeds_container = QWidget()
+            feeds_container.setObjectName("ical_feeds_container")
+            feeds_layout = QVBoxLayout(feeds_container)
+            feeds_layout.setContentsMargins(0, 0, 0, 0)
+            feeds_layout.setSpacing(10)
+            for feed in self.get_ical_feed_settings(settings):
+                self.add_ical_feed_row(feeds_container, feed)
+            add_row("iCal Feeds:", feeds_container)
+
+            add_feed_btn = QPushButton("Add Feed")
+            add_feed_btn.clicked.connect(lambda: (self.add_ical_feed_row(feeds_container), self.save_current_widget_ui_to_config()))
+            self.widget_settings_layout.addWidget(add_feed_btn)
 
         elif widget_type == "commute":
             combo = QComboBox(); combo.setObjectName("tz_combo")
@@ -1931,9 +2567,29 @@ class SettingsDialog(QDialog):
             if combo: settings["timezone"] = combo.currentText()
             combo = self.widget_settings_area.findChild(QComboBox, "ical_style_combo")
             if combo: settings["style"] = combo.currentText()
-            list_widget = self.widget_settings_area.findChild(QListWidget, "url_list")
-            if list_widget:
-                settings["urls"] = [list_widget.item(i).text() for i in range(list_widget.count())]
+            feeds_container = self.widget_settings_area.findChild(QWidget, "ical_feeds_container")
+            if feeds_container and feeds_container.layout():
+                feeds = []
+                for i in range(feeds_container.layout().count()):
+                    row = feeds_container.layout().itemAt(i).widget()
+                    if not row:
+                        continue
+                    name_entry = row.findChild(QLineEdit, "feed_name_entry")
+                    url_entry = row.findChild(QLineEdit, "feed_url_entry")
+                    color_mode = row.findChild(QComboBox, "feed_color_mode_combo")
+                    url = url_entry.text().strip() if url_entry else ""
+                    if not url:
+                        continue
+                    color = ""
+                    if color_mode and color_mode.currentText() == "Custom Color":
+                        color = (row.property("feed_color") or "").strip()
+                    feeds.append({
+                        "url": url,
+                        "name": name_entry.text().strip() if name_entry else "",
+                        "color": color,
+                    })
+                settings["feeds"] = feeds
+                settings.pop("urls", None)
             combo = self.widget_settings_area.findChild(QComboBox, "ical_day_event_limit_combo")
             if combo:
                 try: settings["day_event_limit"] = int(combo.currentText())
@@ -2132,6 +2788,9 @@ class SettingsDialog(QDialog):
 
 class MagicMirrorApp(QMainWindow):
     remote_config_update_requested = Signal()
+    remote_config_replace_requested = Signal(dict)
+    widget_text_update_requested = Signal(str, str, bool)
+    ui_call_requested = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -2151,7 +2810,12 @@ class MagicMirrorApp(QMainWindow):
         self.source_fps = 0.0
         self.media_backend = None
         self.media_backend_name = "none"
+        self.current_scene_name = ""
+        self._last_config_backup_time = 0.0
         self.remote_config_update_requested.connect(self.apply_remote_config, Qt.ConnectionType.QueuedConnection)
+        self.remote_config_replace_requested.connect(self.replace_remote_config, Qt.ConnectionType.QueuedConnection)
+        self.widget_text_update_requested.connect(self.apply_widget_text_update, Qt.ConnectionType.QueuedConnection)
+        self.ui_call_requested.connect(self._execute_ui_call, Qt.ConnectionType.QueuedConnection)
         self.load_config()
 
         self.setWindowTitle("Magic Mirror")
@@ -2174,6 +2838,11 @@ class MagicMirrorApp(QMainWindow):
         self.preview_capture_timer = QTimer(self)
         self.preview_capture_timer.timeout.connect(self.update_preview_image)
         self.preview_capture_timer.start(100) # Capture at 10 FPS
+
+        self.scene_scheduler_timer = QTimer(self)
+        self.scene_scheduler_timer.timeout.connect(self.apply_scene_schedule)
+        self.scene_scheduler_timer.start(60000)
+        self.apply_scene_schedule()
 
         # Start Web Server if enabled
         if self.config.get("web_server_enabled", False):
@@ -2354,34 +3023,22 @@ class MagicMirrorApp(QMainWindow):
         return urls
 
     def get_default_widget_settings(self, widget_type):
-        defaults = {
-            "ical": {"urls": [], "timezone": "US/Central", "style": "Agenda", "day_event_limit": 2},
-            "commute": {"urls": [], "timezone": "US/Central", "commute_minutes": 25, "prep_minutes": 10, "lookahead_hours": 24},
-            "dailyagenda": {"urls": [], "timezone": "US/Central", "max_events": 6, "days_ahead": 3},
-            "photomemories": {
-                "source_mode": "folder",
-                "single_file": "",
-                "folder": "",
-                "refresh_minutes": 60,
-                "max_name_chars": 45,
-                "image_scale": 0.35
-            },
-            "rss": {"urls": [], "style": "Normal", "title": "", "article_count": 5, "ticker_speed": 2},
-            "weatherforecast": {"location": "Salem, IL", "style": "Normal"},
-            "worldclock": {"timezone": "UTC"},
-            "sports": {"configs": [], "style": "Normal", "timezone": "UTC", "ticker_speed": 2},
-            "stock": {"symbols": ["AAPL", "GOOG"], "api_key": self.config.get("FMP_API_KEY", ""), "style": "Normal", "ticker_speed": 2},
-            "date": {"format": "%A, %B %d, %Y"},
-            "countdown": {"name": "New Event", "datetime": ""},
-            "history": {"max_width_chars": 50},
-            "flightboard": {"flight_number": "", "api_key": ""},
-            "energyprice": {"mode": "manual", "manual_price": 0.12, "currency_symbol": "$", "unit": "kWh", "price_url": "", "json_key": ""},
-            "package": {"company": "ups", "tracking_number": "", "api_key": ""},
-            "sunrise": {"lat": 38.624, "lon": -90.184},
-            "sunrisesunset": {"lat": 38.624, "lon": -90.184},
-            "astronomy": {"lat": 38.624, "lon": -90.184}
+        settings = json.loads(json.dumps(WIDGET_REGISTRY.get(widget_type, {}).get("default_settings", {})))
+        if widget_type == "stock" and not settings.get("api_key"):
+            settings["api_key"] = self.config.get("FMP_API_KEY", "")
+        return settings
+
+    def get_widget_registry_summary(self):
+        available = set(WIDGET_CLASSES.keys())
+        return {
+            widget_type: {
+                key: value
+                for key, value in metadata.items()
+                if key != "default_settings"
+            }
+            for widget_type, metadata in WIDGET_REGISTRY.items()
+            if widget_type in available
         }
-        return dict(defaults.get(widget_type, {}))
 
     def add_widget_by_type(self, widget_type):
         if "widget_positions" not in self.config:
@@ -2423,19 +3080,11 @@ class MagicMirrorApp(QMainWindow):
     def get_widget_status(self, widget_name):
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         widget_type = widget_name.split("_")[0]
-        required = {
-            "ical": ["urls"],
-            "rss": ["urls"],
-            "commute": ["urls"],
-            "dailyagenda": ["urls"],
-            "stock": ["api_key"],
-            "flightboard": ["flight_number", "api_key"],
-            "package": ["company", "tracking_number", "api_key"],
-            "photomemories": ["folder"],
-        }
-        needed = required.get(widget_type, [])
+        needed = WIDGET_REGISTRY.get(widget_type, {}).get("required_settings", [])
         for key in needed:
             value = settings.get(key)
+            if widget_type == "ical" and key == "feeds":
+                value = settings.get("feeds") or settings.get("urls")
             if widget_type == "photomemories" and key == "folder":
                 if settings.get("source_mode", "folder") == "single":
                     value = settings.get("single_file")
@@ -2586,8 +3235,9 @@ class MagicMirrorApp(QMainWindow):
         self.central_widget.update()
         self.save_config()
 
-    def load_config(self):
-        default_config = {
+    @staticmethod
+    def get_default_config():
+        return {
             "camera_index": 0,
             "background_mode": "Camera",
             "background_file": "",
@@ -2615,6 +3265,9 @@ class MagicMirrorApp(QMainWindow):
             "font_family": "Helvetica",
             "background_opacity": 0.0,
             "web_server_enabled": False,
+            "web_server_host": "127.0.0.1",
+            "web_server_port": 815,
+            "web_server_token": "",
             "camera_fps": 30,
             "low_power_mode": False,
             "prefer_gpu_acceleration": False,
@@ -2623,18 +3276,162 @@ class MagicMirrorApp(QMainWindow):
             "grid_size": 0.01,
             "onboarding_completed": False,
             "active_profile_name": "default",
-            "disabled_builtin_templates": []
+            "disabled_builtin_templates": [],
+            "config_backups_enabled": True,
+            "scene_schedule_enabled": False,
+            "scene_schedule": json.loads(json.dumps(DEFAULT_SCENE_SCHEDULE)),
         }
+
+    @classmethod
+    def normalized_config(cls, incoming_config):
+        if not isinstance(incoming_config, dict):
+            raise ValueError("Config payload must be a JSON object")
+
+        config = json.loads(json.dumps(incoming_config))
+        defaults = cls.get_default_config()
+        for key, value in defaults.items():
+            config.setdefault(key, json.loads(json.dumps(value)))
+
+        if not isinstance(config.get("widget_positions"), dict):
+            raise ValueError("widget_positions must be an object")
+        if not isinstance(config.get("widget_settings"), dict):
+            raise ValueError("widget_settings must be an object")
+        if not isinstance(config.get("layout_pages"), list):
+            raise ValueError("layout_pages must be a list")
+
+        config["camera_index"] = max(0, int(config.get("camera_index", 0) or 0))
+        config["video_rotation"] = int(config.get("video_rotation", 0) or 0) % 4
+        config["background_mode"] = str(config.get("background_mode") or "Camera")
+        if config["background_mode"] not in {"None", "Camera", "Image", "Video", "YouTube"}:
+            config["background_mode"] = "Camera"
+        config["background_file"] = str(config.get("background_file") or "")
+        config["background_fit_mode"] = "fit" if config.get("background_fit_mode") == "fit" else "fill"
+        config["youtube_quality"] = str(config.get("youtube_quality") or "Best Available")
+        config["background_blur"] = max(0, min(80, int(float(config.get("background_blur", 0) or 0))))
+        config["background_brightness"] = max(0.0, min(3.0, float(config.get("background_brightness", 1.0) or 1.0)))
+        config["background_volume"] = max(0, min(100, int(float(config.get("background_volume", 0) or 0))))
+        config["text_scale_multiplier"] = max(0.4, min(3.0, float(config.get("text_scale_multiplier", 1.0) or 1.0)))
+        config["feed_refresh_interval_ms"] = max(60000, int(float(config.get("feed_refresh_interval_ms", 3600000) or 3600000)))
+        config["camera_fps"] = max(1, min(60, int(float(config.get("camera_fps", 30) or 30))))
+        config["grid_size"] = max(0.001, min(0.25, float(config.get("grid_size", 0.01) or 0.01)))
+        config["background_opacity"] = max(0.0, min(1.0, float(config.get("background_opacity", 0.0) or 0.0)))
+        config["background_crop_x"] = max(0.0, min(1.0, float(config.get("background_crop_x", 0.5) or 0.5)))
+        config["background_crop_y"] = max(0.0, min(1.0, float(config.get("background_crop_y", 0.5) or 0.5)))
+
+        for bool_key in ("mirror_video", "fullscreen", "web_server_enabled", "low_power_mode", "snap_to_grid", "auto_relaunch_on_crash", "onboarding_completed"):
+            config[bool_key] = bool(config.get(bool_key))
+        for bool_key in ("config_backups_enabled", "scene_schedule_enabled"):
+            config[bool_key] = bool(config.get(bool_key))
+
+        config["web_server_host"] = str(config.get("web_server_host") or "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            config["web_server_port"] = max(1, min(65535, int(config.get("web_server_port", 815) or 815)))
+        except (TypeError, ValueError):
+            config["web_server_port"] = 815
+        config["web_server_token"] = str(config.get("web_server_token") or "").strip()
+        if config["web_server_enabled"] and config["web_server_host"] not in {"127.0.0.1", "localhost", "::1"} and not config["web_server_token"]:
+            config["web_server_token"] = secrets.token_urlsafe(24)
+
+        for color_key in ("text_color", "text_shadow_color", "background_color"):
+            value = config.get(color_key)
+            if not isinstance(value, list) or len(value) < 3:
+                value = defaults[color_key]
+            config[color_key] = [max(0, min(255, int(float(channel or 0)))) for channel in value[:3]]
+
+        cleaned_positions = {}
+        for name, layout in config.get("widget_positions", {}).items():
+            if not isinstance(name, str) or not name.strip() or not isinstance(layout, dict):
+                continue
+            item = dict(layout)
+            item["x"] = max(0.0, min(1.0, float(item.get("x", 0.5) or 0.5)))
+            item["y"] = max(0.0, min(1.0, float(item.get("y", 0.5) or 0.5)))
+            item["width"] = max(0.02, min(1.0, float(item.get("width", 0.18) or 0.18)))
+            item["height"] = max(0.02, min(1.0, float(item.get("height", 0.08) or 0.08)))
+            item["z"] = int(float(item.get("z", 0) or 0))
+            item["locked"] = bool(item.get("locked"))
+            item["anchor"] = item.get("anchor") if item.get("anchor") in {"nw", "n", "ne", "w", "center", "e", "sw", "s", "se"} else "nw"
+            item["page"] = str(item.get("page") or "default")
+            item["group"] = str(item.get("group") or "")
+            cleaned_positions[name.strip()] = item
+        config["widget_positions"] = cleaned_positions
+
+        config["layout_pages"] = [str(page).strip() for page in config.get("layout_pages", []) if str(page).strip()]
+        if "default" not in config["layout_pages"]:
+            config["layout_pages"].insert(0, "default")
+
+        normalized_rules = []
+        def clean_time(value, fallback):
+            text = str(value or "").strip()
+            try:
+                hours, minutes = [int(part) for part in text.split(":", 1)]
+                if 0 <= hours <= 23 and 0 <= minutes <= 59:
+                    return f"{hours:02d}:{minutes:02d}"
+            except (TypeError, ValueError):
+                pass
+            return fallback
+
+        for rule in config.get("scene_schedule", []):
+            if not isinstance(rule, dict):
+                continue
+            normalized_rules.append({
+                "name": str(rule.get("name") or "Scene").strip() or "Scene",
+                "enabled": bool(rule.get("enabled")),
+                "start_time": clean_time(rule.get("start_time"), "08:00"),
+                "end_time": clean_time(rule.get("end_time"), "17:00"),
+                "days": [str(day).strip() for day in rule.get("days", []) if str(day).strip()] if isinstance(rule.get("days", []), list) else [],
+                "page": str(rule.get("page") or "default").strip() or "default",
+                "low_power_mode": bool(rule.get("low_power_mode")),
+            })
+        if not normalized_rules:
+            normalized_rules = json.loads(json.dumps(DEFAULT_SCENE_SCHEDULE))
+        config["scene_schedule"] = normalized_rules
+        return config
+
+    def _config_backups_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "config_backups")
+
+    def list_config_backups(self):
+        backups_dir = self._config_backups_dir()
+        if not os.path.isdir(backups_dir):
+            return []
+        return sorted(
+            [name for name in os.listdir(backups_dir) if name.lower().endswith(".json")],
+            reverse=True,
+        )
+
+    def create_config_backup(self, force=False):
+        if not self.config.get("config_backups_enabled", True) or not os.path.exists(CONFIG_FILE):
+            return None
+        now = time.time()
+        if not force and now - self._last_config_backup_time < 60:
+            return None
+        backups_dir = self._config_backups_dir()
+        os.makedirs(backups_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = os.path.join(backups_dir, f"config.{timestamp}.json")
+        try:
+            shutil.copy2(CONFIG_FILE, backup_path)
+            self._last_config_backup_time = now
+            backups = self.list_config_backups()
+            for old_name in backups[MAX_CONFIG_BACKUPS:]:
+                try:
+                    os.remove(os.path.join(backups_dir, old_name))
+                except OSError:
+                    pass
+            return backup_path
+        except OSError as e:
+            print(f"Config backup failed: {e}")
+            return None
+
+    def load_config(self):
+        default_config = self.get_default_config()
         if not os.path.exists(CONFIG_FILE):
             self.config = default_config
         else:
             try:
                 with open(CONFIG_FILE, "r") as f:
-                    self.config = json.load(f)
-                for k, v in default_config.items():
-                    if k not in self.config:
-                        self.config[k] = v
-            except (json.JSONDecodeError, IOError):
+                    self.config = self.normalized_config(json.load(f))
+            except (json.JSONDecodeError, IOError, ValueError):
                 self.config = default_config
         try:
             current_grid = float(self.config.get("grid_size", 0.01))
@@ -2649,6 +3446,7 @@ class MagicMirrorApp(QMainWindow):
         self.save_config()
 
     def migrate_config_schema(self):
+        self.config = self.normalized_config(self.config)
         self.config.setdefault("layout_pages", list(DEFAULT_LAYOUT_PAGES))
         if not self.config.get("active_page"):
             self.config["active_page"] = "default"
@@ -2739,11 +3537,76 @@ class MagicMirrorApp(QMainWindow):
                 pass
         return True
 
-    def save_config(self):
+    @staticmethod
+    def _time_window_matches(start_time, end_time, now):
+        if not start_time or not end_time:
+            return False
+        try:
+            start_hours, start_minutes = [int(part) for part in start_time.split(":", 1)]
+            end_hours, end_minutes = [int(part) for part in end_time.split(":", 1)]
+        except (TypeError, ValueError):
+            return False
+        current_minutes = now.hour * 60 + now.minute
+        start_total = start_hours * 60 + start_minutes
+        end_total = end_hours * 60 + end_minutes
+        if start_total <= end_total:
+            return start_total <= current_minutes <= end_total
+        return current_minutes >= start_total or current_minutes <= end_total
+
+    @staticmethod
+    def _days_match(days, now):
+        if not days:
+            return True
+        day_name = now.strftime("%a").lower()
+        normalized = {str(day).strip().lower()[:3] for day in days if str(day).strip()}
+        return day_name in normalized
+
+    def get_matching_scene_rule(self, now=None):
+        if not self.config.get("scene_schedule_enabled", False):
+            return None
+        now = now or datetime.now()
+        for rule in self.config.get("scene_schedule", []):
+            if not rule.get("enabled"):
+                continue
+            if not self._days_match(rule.get("days", []), now):
+                continue
+            if self._time_window_matches(rule.get("start_time", ""), rule.get("end_time", ""), now):
+                return rule
+        return None
+
+    def apply_scene_schedule(self):
+        rule = self.get_matching_scene_rule()
+        scene_name = rule.get("name", "") if rule else ""
+        if scene_name != self.current_scene_name:
+            self.current_scene_name = scene_name
+        if not rule:
+            return
+
+        changed = False
+        page = (rule.get("page") or "default").strip() or "default"
+        if page not in self.config.get("layout_pages", []):
+            self.config.setdefault("layout_pages", []).append(page)
+        if self.config.get("active_page") != page:
+            self.config["active_page"] = page
+            changed = True
+
+        low_power = bool(rule.get("low_power_mode"))
+        if self.config.get("low_power_mode", False) != low_power:
+            self.config["low_power_mode"] = low_power
+            self.apply_performance_settings()
+            changed = True
+
+        if changed:
+            self.central_widget.update()
+            self.save_config()
+
+    def save_config(self, create_backup=True):
         with QMutexLocker(self.config_mutex):
             tmp_path = None
             try:
                 config_dir = os.path.dirname(os.path.abspath(CONFIG_FILE)) or "."
+                if create_backup:
+                    self.create_config_backup()
                 with tempfile.NamedTemporaryFile(
                     mode="w",
                     encoding="utf-8",
@@ -3148,15 +4011,17 @@ class MagicMirrorApp(QMainWindow):
         dow_h = header_metrics.height() + 10
 
         if not calendar_data:
+            today = datetime.now()
+            fallback_rows = len(calendar.Calendar(calendar.SUNDAY).monthdayscalendar(today.year, today.month))
             return {
                 "cell_w": cell_w,
-                "row_heights": [min_cell_h] * 6,
+                "row_heights": [min_cell_h] * fallback_rows,
                 "title_h": title_h,
                 "dow_h": dow_h,
                 "grid_w": cell_w * 7,
-                "grid_h": min_cell_h * 6,
+                "grid_h": min_cell_h * fallback_rows,
                 "outer_w": cell_w * 7 + 20,
-                "outer_h": title_h + dow_h + min_cell_h * 6 + 20,
+                "outer_h": title_h + dow_h + min_cell_h * fallback_rows + 20,
                 "title_font": title_font,
                 "header_font": header_font,
                 "body_font": body_font,
@@ -3167,12 +4032,13 @@ class MagicMirrorApp(QMainWindow):
 
         cal_obj = calendar.Calendar(calendar.SUNDAY)
         weeks = cal_obj.monthdayscalendar(calendar_data["year"], calendar_data["month"])
-        while len(weeks) < 6:
-            weeks.append([0] * 7)
+        weeks = [week for week in weeks if any(day_num for day_num in week)]
+        if not weeks:
+            weeks = [[0] * 7]
         events_by_day = calendar_data.get("events", {})
         row_heights = []
         line_h = body_metrics.height() + 2
-        for week in weeks[:6]:
+        for week in weeks:
             week_max_events = 0
             for day_num in week:
                 if not day_num:
@@ -3481,14 +4347,15 @@ class MagicMirrorApp(QMainWindow):
 
         cal = calendar.Calendar(calendar.SUNDAY)
         weeks = cal.monthdayscalendar(calendar_data["year"], calendar_data["month"])
-        while len(weeks) < 6:
-            weeks.append([0] * 7)
+        weeks = [week for week in weeks if any(day_num for day_num in week)]
+        if not weeks:
+            weeks = [[0] * 7]
         today = datetime.now().date()
         events_by_day = calendar_data.get("events", {})
 
         painter.setFont(body_font)
         current_row_y = grid_y
-        for row_idx, week in enumerate(weeks[:6]):
+        for row_idx, week in enumerate(weeks):
             cell_h = row_heights[row_idx]
             for col_idx, day_num in enumerate(week):
                 cell_rect = QRect(grid_x + col_idx * cell_w, current_row_y, cell_w, cell_h)
@@ -3724,6 +4591,55 @@ class MagicMirrorApp(QMainWindow):
         # Called from the web server thread; queued signal marshals work to the UI thread.
         self.remote_config_update_requested.emit()
 
+    def request_remote_config_replace(self, new_config):
+        self.remote_config_replace_requested.emit(new_config)
+
+    def replace_remote_config(self, new_config):
+        try:
+            validated = self.normalized_config(new_config)
+        except ValueError as e:
+            print(f"Rejected remote config update: {e}")
+            return
+        with QMutexLocker(self.config_mutex):
+            self.config.clear()
+            self.config.update(validated)
+        self.save_config()
+        self.apply_remote_config()
+
+    def queue_widget_text_update(self, widget_name, text, is_ticker=False):
+        self.widget_text_update_requested.emit(widget_name, text, bool(is_ticker))
+
+    def apply_widget_text_update(self, widget_name, text, is_ticker=False):
+        widget = self.widget_manager.widgets.get(widget_name) if getattr(self, "widget_manager", None) else None
+        if not widget:
+            return
+        if is_ticker and widget.text != text:
+            widget.ticker_scroll_x = 0.0
+            widget.last_ticker_step_time = None
+            widget.ticker_initialized = False
+        widget.text = text
+        if self.central_widget:
+            self.central_widget.update()
+
+    def _execute_ui_call(self, request):
+        try:
+            request["result"] = request["func"]()
+        except Exception as e:
+            request["error"] = e
+        finally:
+            request["event"].set()
+
+    def call_on_ui_thread(self, func, timeout=10):
+        if QThread.currentThread() == self.thread():
+            return func()
+        request = {"func": func, "event": threading.Event(), "result": None, "error": None}
+        self.ui_call_requested.emit(request)
+        if not request["event"].wait(timeout):
+            raise TimeoutError("Timed out waiting for UI thread")
+        if request["error"] is not None:
+            raise request["error"]
+        return request["result"]
+
     def apply_remote_config(self):
         self.migrate_config_schema()
         self.set_fullscreen(self.config.get("fullscreen", True))
@@ -3735,8 +4651,12 @@ class MagicMirrorApp(QMainWindow):
     def start_web_server(self):
         if self.web_server is None:
             try:
-                self.web_server = web_server.start_server(self, port=815)
-                print("Web server started on port 815.")
+                host = self.config.get("web_server_host", "127.0.0.1")
+                port = int(self.config.get("web_server_port", 815) or 815)
+                self.web_server = web_server.start_server(self, host=host, port=port)
+                print(f"Web server started on http://{host}:{port}.")
+                if self.config.get("web_server_token"):
+                    print(f"Remote access URL: http://{host}:{port}/?token={self.config.get('web_server_token')}")
             except Exception as e:
                 print(f"Failed to start web server: {e}")
                 self.web_server = None

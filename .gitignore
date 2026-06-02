@@ -1,4 +1,14 @@
 /Build/
+/_internal/
+/__pycache__/
+/.cache/
+/.idea/
+/.venv/
+/profiles/
+/config_backups/
+/MagicMirror.exe
+*.py[cod]
+*.pyd
 config.json
 node_modules/
 npm-debug.log*
@@ -6,5 +16,4 @@ yarn-error.log*
 yarn-debug.log*
 .DS_Store
 .vscode/
-
 package-lock.json
