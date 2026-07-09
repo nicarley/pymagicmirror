@@ -1,7 +1,8 @@
 import json
 import os
+import secrets
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlparse
 
@@ -19,6 +20,8 @@ THEME_PRESETS = {
 }
 
 ACCESSIBILITY_PRESETS = ["Standard", "Large Text", "High Contrast", "Large + High Contrast", "Night Mode", "Matrix Mode"]
+REDACTED_VALUE = "__CONFIGURED__"
+SENSITIVE_KEYS = {"api_key", "fmp_api_key", "web_server_token", "tracking_number"}
 
 GENERAL_JS = r"""
 const tab=document.getElementById('tab-general');tab.innerHTML='';
@@ -27,8 +30,8 @@ addField(cg,'Background Mode',()=>buildSelect(meta.background_mode_options,confi
 if(config.background_mode==='Camera')addField(cg,'Camera Index',()=>buildInput('number',config.camera_index,e=>{config.camera_index=parseInt(e.target.value,10)||0}));
 if(['Image','Video','YouTube'].includes(config.background_mode))addField(cg,'File Path / URL',()=>buildInput('text',config.background_file,e=>{config.background_file=e.target.value}));
 addField(cg,'YouTube Quality',()=>buildSelect(meta.youtube_quality_options,config.youtube_quality,e=>{config.youtube_quality=e.target.value}));
-addField(cg,'Background Rotation',()=>buildSelect(['0','1','2','3'],String(config.video_rotation??0),e=>{config.video_rotation=parseInt(e.target.value,10)||0}));
-addField(cg,'Background Fit',()=>buildSelect(['fill','fit'],config.background_fit_mode,e=>{config.background_fit_mode=e.target.value}));
+addField(cg,'Background Rotation',()=>buildSelect([{value:'0',label:'0 degrees'},{value:'1',label:'90 degrees'},{value:'2',label:'180 degrees'},{value:'3',label:'270 degrees'}],String(config.video_rotation??0),e=>{config.video_rotation=parseInt(e.target.value,10)||0}));
+addField(cg,'Background Fit',()=>buildSelect([{value:'fill',label:'Fill frame'},{value:'fit',label:'Fit inside frame'}],config.background_fit_mode,e=>{config.background_fit_mode=e.target.value}));
 addField(cg,'Background Blur',()=>buildInput('number',config.background_blur,e=>{config.background_blur=parseInt(e.target.value,10)||0}));
 addField(cg,'Background Brightness',()=>buildInput('number',config.background_brightness,e=>{config.background_brightness=parseFloat(e.target.value)||1.0}));
 addField(cg,'Background Volume',()=>buildInput('number',config.background_volume,e=>{config.background_volume=parseInt(e.target.value,10)||0}));
@@ -56,9 +59,9 @@ const appSection=createSection('Appearance'),grid=document.createElement('div');
 addField(grid,'Font Family',()=>buildSelect(meta.available_fonts,config.font_family,e=>{config.font_family=e.target.value}));
 addField(grid,'Global Text Size',()=>buildInput('number',config.text_scale_multiplier,e=>{config.text_scale_multiplier=parseFloat(e.target.value)||1.0}));
 addField(grid,'Background Dimming',()=>buildInput('number',config.background_opacity,e=>{config.background_opacity=parseFloat(e.target.value)||0.0}));
-addField(grid,'Text Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.text_color);i.oninput=e=>{config.text_color=hexToRgb(e.target.value)};return i});
-addField(grid,'Shadow Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.text_shadow_color);i.oninput=e=>{config.text_shadow_color=hexToRgb(e.target.value)};return i});
-addField(grid,'Background Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.background_color);i.oninput=e=>{config.background_color=hexToRgb(e.target.value)};return i});
+addField(grid,'Text Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.text_color);i.oninput=e=>{config.text_color=hexToRgb(e.target.value);setDirty()};return i});
+addField(grid,'Shadow Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.text_shadow_color);i.oninput=e=>{config.text_shadow_color=hexToRgb(e.target.value);setDirty()};return i});
+addField(grid,'Background Color',()=>{const i=document.createElement('input');i.type='color';i.value=rgbToHex(config.background_color);i.oninput=e=>{config.background_color=hexToRgb(e.target.value);setDirty()};return i});
 tab.appendChild(appSection);
 const presetSection=createSection('Presets'),pg=document.createElement('div');pg.className='grid-2';presetSection.appendChild(pg);
 addField(pg,'Theme Preset',()=>buildSelect(Object.keys(THEME_PRESETS),'',e=>{const p=THEME_PRESETS[e.target.value];if(p){Object.assign(config,JSON.parse(JSON.stringify(p)));renderAppearanceTab()}},true));
@@ -72,11 +75,15 @@ const templates=createSection('Templates');
 const applyRow=document.createElement('div');applyRow.className='inline-row';const templateSelect=buildSelect(meta.templates,'',()=>{},true);const applyBtn=document.createElement('button');applyBtn.textContent='Apply Template';applyBtn.onclick=()=>{if(templateSelect.value)callAction('apply_template',{name:templateSelect.value})};applyRow.appendChild(templateSelect);applyRow.appendChild(applyBtn);templates.appendChild(applyRow);
 const saveRow=document.createElement('div');saveRow.className='inline-row';const templateName=document.createElement('input');templateName.type='text';templateName.placeholder='Template name';const saveTemplateBtn=document.createElement('button');saveTemplateBtn.className='secondary';saveTemplateBtn.textContent='Save Current as Template';saveTemplateBtn.onclick=async()=>{await saveConfig();await callAction('save_template',{name:templateName.value})};const removeTemplateBtn=document.createElement('button');removeTemplateBtn.className='danger';removeTemplateBtn.textContent='Remove Template';removeTemplateBtn.onclick=()=>{if(templateSelect.value)callAction('remove_template',{name:templateSelect.value})};saveRow.appendChild(templateName);saveRow.appendChild(saveTemplateBtn);saveRow.appendChild(removeTemplateBtn);templates.appendChild(saveRow);tab.appendChild(templates);
 const manage=createSection('Manage Widgets');const addRow=document.createElement('div');addRow.className='inline-row';const widgetTypeSelect=buildSelect(meta.widget_types,'',()=>{},true);const addBtn=document.createElement('button');addBtn.className='success';addBtn.textContent='Add Widget';addBtn.onclick=()=>{if(widgetTypeSelect.value)callAction('add_widget',{widget_type:widgetTypeSelect.value})};addRow.appendChild(widgetTypeSelect);addRow.appendChild(addBtn);manage.appendChild(addRow);tab.appendChild(manage);
-const widgets=createSection('Widget Settings');
-for(const widgetName of sortedWidgetNames()){const settings=config.widget_settings?.[widgetName]||{},layout=config.widget_positions?.[widgetName]||{},card=document.createElement('div');card.className='widget-card';
-const header=document.createElement('div');header.className='widget-header';const titleWrap=document.createElement('div');const title=document.createElement('div');title.className='widget-title';title.textContent=widgetName;titleWrap.appendChild(title);const subtitle=document.createElement('div');subtitle.className='muted';subtitle.textContent=`Status: ${meta.widget_statuses?.[widgetName]||'OK'}`;titleWrap.appendChild(subtitle);header.appendChild(titleWrap);
-const headerButtons=document.createElement('div');headerButtons.className='inline-row';headerButtons.style.flex='0 0 auto';const renameInput=document.createElement('input');renameInput.type='text';renameInput.value=widgetName;renameInput.style.width='170px';const renameBtn=document.createElement('button');renameBtn.className='secondary';renameBtn.textContent='Rename';renameBtn.onclick=()=>{if(renameInput.value&&renameInput.value!==widgetName)callAction('rename_widget',{old_name:widgetName,new_name:renameInput.value})};const removeBtn=document.createElement('button');removeBtn.className='danger';removeBtn.textContent='Remove';removeBtn.onclick=()=>callAction('remove_widget',{widget_name:widgetName});headerButtons.appendChild(renameInput);headerButtons.appendChild(renameBtn);headerButtons.appendChild(removeBtn);header.appendChild(headerButtons);card.appendChild(header);
-const lg=document.createElement('div');lg.className='grid-2';
+const widgets=createSection('Widget Settings'),shell=document.createElement('div');shell.className='widget-editor';widgets.appendChild(shell);
+const widgetNames=sortedWidgetNames();if(!widgetNames.includes(selectedWidgetName))selectedWidgetName=widgetNames[0]||null;
+const nav=document.createElement('div');nav.className='widget-list';
+for(const name of widgetNames){const item=document.createElement('button');item.className='widget-nav-item secondary';if(name===selectedWidgetName)item.classList.add('selected');const status=meta.widget_statuses?.[name]||'Ready';item.innerHTML=`<strong>${escapeHtml(name)}</strong><span>${escapeHtml(status)}</span>`;item.onclick=()=>{selectedWidgetName=name;renderWidgetsTab();renderPreviewWidgets()};nav.appendChild(item)}shell.appendChild(nav);
+const editor=document.createElement('div');editor.className='widget-properties';shell.appendChild(editor);
+if(selectedWidgetName){const widgetName=selectedWidgetName,settings=config.widget_settings?.[widgetName]||{},layout=config.widget_positions?.[widgetName]||{};
+const header=document.createElement('div');header.className='widget-header';const titleWrap=document.createElement('div');const title=document.createElement('div');title.className='widget-title';title.textContent=humanizeKey(widgetName);titleWrap.appendChild(title);const subtitle=document.createElement('div');subtitle.className='muted';subtitle.textContent=`${widgetName} | ${meta.widget_statuses?.[widgetName]||'Ready'}`;titleWrap.appendChild(subtitle);header.appendChild(titleWrap);
+const headerButtons=document.createElement('div');headerButtons.className='inline-row compact';const renameInput=document.createElement('input');renameInput.type='text';renameInput.value=widgetName;const renameBtn=document.createElement('button');renameBtn.className='secondary';renameBtn.textContent='Rename';renameBtn.onclick=()=>{if(renameInput.value&&renameInput.value!==widgetName)callAction('rename_widget',{old_name:widgetName,new_name:renameInput.value})};const removeBtn=document.createElement('button');removeBtn.className='danger';removeBtn.textContent='Remove';removeBtn.onclick=()=>callAction('remove_widget',{widget_name:widgetName});headerButtons.appendChild(renameInput);headerButtons.appendChild(renameBtn);headerButtons.appendChild(removeBtn);header.appendChild(headerButtons);editor.appendChild(header);
+const layoutTitle=document.createElement('h3');layoutTitle.textContent='Layout';editor.appendChild(layoutTitle);const lg=document.createElement('div');lg.className='grid-2';
 addField(lg,'Anchor',()=>buildSelect(['nw','n','ne','w','center','e','sw','s','se'],layout.anchor||'nw',e=>{config.widget_positions[widgetName].anchor=e.target.value;renderPreviewWidgets()}));
 addField(lg,'Layer',()=>buildInput('number',layout.z??0,e=>{config.widget_positions[widgetName].z=parseInt(e.target.value,10)||0;renderPreviewWidgets()}));
 addField(lg,'Page',()=>buildSelect(meta.layout_pages,layout.page||'default',e=>{config.widget_positions[widgetName].page=e.target.value||'default';renderPreviewWidgets()}));
@@ -85,9 +92,8 @@ addField(lg,'Lock Widget',()=>buildInput('checkbox',layout.locked,e=>{config.wid
 addField(lg,'Conditional Visibility',()=>buildInput('checkbox',layout.visibility_rules?.enabled,e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.enabled=e.target.checked}));
 addField(lg,'Visible From',()=>buildInput('text',layout.visibility_rules?.start_time||'',e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.start_time=e.target.value}));
 addField(lg,'Visible To',()=>buildInput('text',layout.visibility_rules?.end_time||'',e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.end_time=e.target.value}));
-addField(lg,'Days',()=>buildInput('text',(layout.visibility_rules?.days||[]).join(', '),e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.days=e.target.value.split(',').map(v=>v.trim()).filter(Boolean)}));
-card.appendChild(lg);
-const sg=document.createElement('div');sg.className='grid-2';for(const key of Object.keys(settings).sort()){addField(sg,key,()=>createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue},{forceJson:key==='feeds'}))}card.appendChild(sg);widgets.appendChild(card)}
+addField(lg,'Days',()=>buildInput('text',(layout.visibility_rules?.days||[]).join(', '),e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.days=e.target.value.split(',').map(v=>v.trim()).filter(Boolean)}));editor.appendChild(lg);
+const settingsTitle=document.createElement('h3');settingsTitle.textContent='Content';editor.appendChild(settingsTitle);const sg=document.createElement('div');sg.className='grid-2';for(const key of Object.keys(settings).sort()){addField(sg,humanizeKey(key),()=>createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue},{forceJson:key==='feeds'}))}editor.appendChild(sg)}
 tab.appendChild(widgets);
 """
 
@@ -98,56 +104,57 @@ const tab=document.getElementById('tab-diagnostics');tab.innerHTML='';const sect
 HTML_TEMPLATE = """
 <!doctype html><html><head><meta charset="utf-8"><title>MagicMirror Web Manager</title>
 <style>
-:root{--bg:#edf1f4;--panel:#f4f7fa;--panel2:#ffffff;--panel3:#ffffff;--line:#d5dde5;--text:#202833;--muted:#647284;--accent:#2f8f6b;--accent-hi:#3ca77e;--danger:#d25f5a;--ok:#2f8f6b;--warn:#d79b45}
+:root{--bg:#edf1f4;--panel:#f4f7fa;--panel2:#ffffff;--panel3:#ffffff;--line:#d5dde5;--text:#202833;--muted:#647284;--accent:#2f8f6b;--accent-hi:#3ca77e;--danger:#c94f49;--ok:#2f8f6b;--warn:#d79b45}
 *{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
 header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);background:#ffffff;box-shadow:0 1px 2px rgba(32,40,51,.06)}
-.brand{display:flex;flex-direction:column;gap:2px}.brand strong{font-size:15px}.brand span{color:var(--muted);font-size:12px}
+.brand{display:flex;flex-direction:column;gap:2px}.brand strong{font-size:16px}.brand span{color:var(--muted);font-size:12px}
 #container{flex:1;display:grid;grid-template-columns:minmax(360px,1.8fr) minmax(420px,1.2fr);min-height:0}
 #preview-pane{position:relative;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line)}
 #preview-img{max-width:100%;max-height:100%;object-fit:contain}#overlay{position:absolute;pointer-events:none}
 .widget-box{position:absolute;display:flex;align-items:center;justify-content:center;padding:4px 8px;border:1px solid rgba(72,172,130,.78);border-radius:6px;background:rgba(47,143,107,.18);color:#fff;font-size:11px;cursor:move;pointer-events:auto;user-select:none;overflow:hidden;white-space:nowrap;box-shadow:0 8px 18px rgba(0,0,0,.2)}
 .widget-box.locked{cursor:default;border-style:dashed;border-color:rgba(215,155,69,.9);background:rgba(215,155,69,.12)}.widget-box.active{border-color:#fff;background:rgba(47,143,107,.28)}
 #settings-pane{display:flex;flex-direction:column;min-height:0;background:var(--panel)}.tabs{display:flex;gap:8px;padding:14px 18px;border-bottom:1px solid var(--line);background:#ffffff}
-.tab-btn{background:#e3e9ef;color:var(--muted);border:1px solid transparent;border-radius:8px;padding:10px 16px;cursor:pointer}.tab-btn.active{color:#173427;border-color:rgba(60,167,126,.45);background:#dcefe7}
+.tab-btn{background:transparent;color:var(--muted);border:1px solid transparent;border-radius:6px;padding:9px 14px;cursor:pointer}.tab-btn.active{color:#173427;border-color:#b8d9cc;background:#e4f2ed}
 #settings-content{flex:1;min-height:0;overflow:auto;padding:22px}#settings-footer{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-top:1px solid var(--line);background:#ffffff}
-.tab-panel{display:none}.tab-panel.active{display:block}.section{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:18px}.section h2{margin:0 0 16px;font-size:15px}
+.tab-panel{display:none}.tab-panel.active{display:block}.section{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:20px;margin-bottom:18px}.section h2{margin:0 0 16px;font-size:15px}.section h3,.widget-properties h3{margin:20px 0 12px;font-size:12px;color:var(--muted);text-transform:uppercase}
 .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.form-group{margin-bottom:14px}label{display:block;margin-bottom:7px;color:var(--muted);font-size:12px}
-input[type=text],input[type=number],select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel3);color:var(--text);font:inherit}input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent-hi)}textarea{min-height:92px;resize:vertical}input[type=checkbox]{transform:scale(1.15)}button{border:1px solid rgba(32,40,51,.08);border-radius:8px;padding:10px 15px;cursor:pointer;background:var(--accent);color:#fff;font:inherit;font-weight:600}button:hover{background:var(--accent-hi)}button.secondary{background:#dfe6ee;color:#25313d}button.secondary:hover{background:#d2dbe5}button.danger{background:var(--danger);color:#fff}button.success{background:var(--ok)}
-.inline-row{display:flex;gap:10px;align-items:center}.inline-row>*{flex:1}.inline-row>button{flex:0 0 auto}.widget-card{background:#ffffff;border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}.widget-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.widget-title{font-weight:700}.muted{color:var(--muted);font-size:12px}pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#f7f9fb;border:1px solid var(--line);border-radius:8px;padding:14px}
-@media(max-width:1100px){#container{grid-template-columns:1fr}#preview-pane{min-height:38vh}}
+input[type=text],input[type=password],input[type=number],select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel3);color:var(--text);font:inherit}input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent-hi);box-shadow:0 0 0 2px rgba(60,167,126,.14)}textarea{min-height:92px;resize:vertical}input[type=checkbox]{transform:scale(1.15)}button{border:1px solid rgba(32,40,51,.08);border-radius:6px;padding:10px 15px;cursor:pointer;background:var(--accent);color:#fff;font:inherit;font-weight:600}button:hover{background:var(--accent-hi)}button.secondary{background:#e2e8ee;color:#25313d}button.secondary:hover{background:#d5dee6}button.danger{background:#fff2f1;border-color:#e8b1ad;color:#a43e38}button.danger:hover{background:#f9dfdd}button.success{background:var(--ok)}
+.inline-row{display:flex;gap:10px;align-items:center}.inline-row>*{flex:1}.inline-row>button{flex:0 0 auto}.inline-row.compact input{width:150px}.widget-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.widget-title{font-weight:700}.muted{color:var(--muted);font-size:12px}.widget-editor{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;min-height:360px}.widget-list{display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);padding-right:14px}.widget-nav-item{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:3px;padding:10px 12px}.widget-nav-item span{font-size:11px;color:var(--muted);font-weight:400}.widget-nav-item.selected{background:#dcefe7;border-color:#9fcab9;color:#173427}.widget-properties{min-width:0}#dirty-indicator{color:var(--muted);font-size:12px}#dirty-indicator.changed{color:#8a641f}pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#f7f9fb;border:1px solid var(--line);border-radius:6px;padding:14px}
+@media(max-width:1100px){#container{grid-template-columns:1fr}#preview-pane{min-height:38vh}.widget-editor{grid-template-columns:1fr}.widget-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line);padding:0 0 14px}}
 </style></head><body>
-<header><div class="brand"><strong>MagicMirror</strong><span>Local display manager</span></div><div class="inline-row" style="flex:0 0 auto"><button id="start-stream-btn" class="secondary" onclick="startStream()">Start Stream</button><button id="stop-stream-btn" class="secondary" onclick="stopStream()" style="display:none">Stop Stream</button><button class="secondary" onclick="refreshPreview()">Refresh Preview</button><button class="secondary" onclick="openFullscreen()">Full Preview</button><button onclick="saveConfig()">Save Changes</button></div></header>
-<div id="container"><div id="preview-pane"><img id="preview-img" src="/api/preview"><div id="overlay"></div></div><div id="settings-pane"><div class="tabs"><button class="tab-btn active" data-tab="general" onclick="switchTab('general')">General</button><button class="tab-btn" data-tab="appearance" onclick="switchTab('appearance')">Appearance</button><button class="tab-btn" data-tab="widgets" onclick="switchTab('widgets')">Widgets</button><button class="tab-btn" data-tab="diagnostics" onclick="switchTab('diagnostics')">Diagnostics</button></div><div id="settings-content"><div id="tab-general" class="tab-panel active"></div><div id="tab-appearance" class="tab-panel"></div><div id="tab-widgets" class="tab-panel"></div><div id="tab-diagnostics" class="tab-panel"></div></div><div id="settings-footer"><span id="status" class="muted"></span><button onclick="saveConfig()">Save</button></div></div></div>
+<header><div class="brand"><strong>Magic Mirror</strong><span>Display manager</span></div><div class="inline-row" style="flex:0 0 auto"><button id="start-stream-btn" class="secondary" onclick="startStream()">Live Preview</button><button id="stop-stream-btn" class="secondary" onclick="stopStream()" style="display:none">Stop Preview</button><button class="secondary" onclick="refreshPreview()">Refresh</button><button class="secondary" onclick="openFullscreen()">Full Screen</button></div></header>
+<div id="container"><div id="preview-pane"><img id="preview-img" src="/api/preview"><div id="overlay"></div></div><div id="settings-pane"><div class="tabs"><button class="tab-btn active" data-tab="general" onclick="switchTab('general')">Display</button><button class="tab-btn" data-tab="appearance" onclick="switchTab('appearance')">Style</button><button class="tab-btn" data-tab="widgets" onclick="switchTab('widgets')">Content</button><button class="tab-btn" data-tab="diagnostics" onclick="switchTab('diagnostics')">System</button></div><div id="settings-content"><div id="tab-general" class="tab-panel active"><span class="muted">Loading settings...</span></div><div id="tab-appearance" class="tab-panel"></div><div id="tab-widgets" class="tab-panel"></div><div id="tab-diagnostics" class="tab-panel"></div></div><div id="settings-footer"><div><span id="status" class="muted"></span><span id="dirty-indicator">All changes saved</span></div><button id="save-config-btn" onclick="saveConfig()">Save Changes</button></div></div></div>
 <div id="fullscreen-modal" onclick="closeFullscreen()" style="display:none;position:fixed;inset:0;background:black;z-index:9999;align-items:center;justify-content:center"><img id="fullscreen-img" style="max-width:100%;max-height:100%;object-fit:contain"></div>
 <script>
 const THEME_PRESETS=__THEME_PRESETS__,ACCESSIBILITY_PRESETS=__ACCESSIBILITY_PRESETS__;
-let state=null,config={},meta={},draggedEl=null,streamInterval=null,fullscreenInterval=null;const img=document.getElementById('preview-img'),overlay=document.getElementById('overlay');
-function setStatus(m,e=false){const s=document.getElementById('status');s.textContent=m||'';s.style.color=e?'#ff9f9f':'#b0b0b0'}function rgbToHex(rgb){if(!Array.isArray(rgb)||rgb.length<3)return'#000000';const c=n=>Math.max(0,Math.min(255,Number(n)||0));return'#'+[c(rgb[0]),c(rgb[1]),c(rgb[2])].map(v=>v.toString(16).padStart(2,'0')).join('')}function hexToRgb(hex){const m=/^#?([a-f0-9]{2})([a-f0-9]{2})([a-f0-9]{2})$/i.exec(hex||'');if(!m)return[0,0,0];return[parseInt(m[1],16),parseInt(m[2],16),parseInt(m[3],16)]}
+let state=null,config={},meta={},draggedEl=null,streamInterval=null,fullscreenInterval=null,activeTab='general',selectedWidgetName=null,dirty=false;const img=document.getElementById('preview-img'),overlay=document.getElementById('overlay');
+function setStatus(m,e=false){const s=document.getElementById('status');s.textContent=m?`${m}  `:'';s.style.color=e?'#a43e38':'#647284'}function setDirty(value=true){dirty=value;const i=document.getElementById('dirty-indicator');i.textContent=value?'Unsaved changes':'All changes saved';i.classList.toggle('changed',value)}function rgbToHex(rgb){if(!Array.isArray(rgb)||rgb.length<3)return'#000000';const c=n=>Math.max(0,Math.min(255,Number(n)||0));return'#'+[c(rgb[0]),c(rgb[1]),c(rgb[2])].map(v=>v.toString(16).padStart(2,'0')).join('')}function hexToRgb(hex){const m=/^#?([a-f0-9]{2})([a-f0-9]{2})([a-f0-9]{2})$/i.exec(hex||'');if(!m)return[0,0,0];return[parseInt(m[1],16),parseInt(m[2],16),parseInt(m[3],16)]}function humanizeKey(value){return String(value||'').replace(/_/g,' ').replace(/\\b\\w/g,c=>c.toUpperCase())}function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function fetchJson(url,options={}){const r=await fetch(url,options);if(!r.ok){throw new Error(await r.text()||(`${r.status} ${r.statusText}`))}return r.json()}
-async function loadState(){try{state=await fetchJson('/api/state');config=state.config;meta=state.meta;renderAll()}catch(err){console.error(err);setStatus(`Load failed: ${err.message}`,true)}}
-async function saveConfig(){try{setStatus('Saving...');await fetchJson('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});setStatus('Saved');await loadState();refreshPreview()}catch(err){console.error(err);setStatus(`Save failed: ${err.message}`,true)}}
+async function loadState(){try{state=await fetchJson('/api/state');config=state.config;meta=state.meta;renderAll();setDirty(false)}catch(err){console.error(err);setStatus(`Load failed: ${err.message}`,true)}}
+async function saveConfig(){try{setStatus('Saving...');await fetchJson('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});await loadState();setStatus('Saved');refreshPreview()}catch(err){console.error(err);setStatus(`Save failed: ${err.message}`,true)}}
 async function callAction(action,payload={}){try{setStatus(`${action}...`);const r=await fetchJson('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload})});setStatus(r.message||'Done');await loadState();refreshPreview()}catch(err){console.error(err);setStatus(`${action} failed: ${err.message}`,true)}}
-function switchTab(tab){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`))}
+function switchTab(tab){activeTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));renderActiveTab()}
 function refreshPreview(){const t=Date.now();img.src=`/api/preview?t=${t}`;if(document.getElementById('fullscreen-modal').style.display==='flex'){document.getElementById('fullscreen-img').src=`/api/preview?t=${t}`}}
 function openFullscreen(){const m=document.getElementById('fullscreen-modal');m.style.display='flex';refreshPreview();fullscreenInterval=setInterval(refreshPreview,1000)}function closeFullscreen(){document.getElementById('fullscreen-modal').style.display='none';if(fullscreenInterval)clearInterval(fullscreenInterval);fullscreenInterval=null}
-function startStream(){if(streamInterval)return;streamInterval=setInterval(refreshPreview,100);document.getElementById('start-stream-btn').style.display='none';document.getElementById('stop-stream-btn').style.display='inline-block';document.getElementById('settings-pane').style.display='none';overlay.innerHTML=''}
+function startStream(){if(streamInterval)return;refreshPreview();streamInterval=setInterval(refreshPreview,500);document.getElementById('start-stream-btn').style.display='none';document.getElementById('stop-stream-btn').style.display='inline-block';document.getElementById('settings-pane').style.display='none';overlay.innerHTML=''}
 function stopStream(){if(streamInterval)clearInterval(streamInterval);streamInterval=null;document.getElementById('start-stream-btn').style.display='inline-block';document.getElementById('stop-stream-btn').style.display='none';document.getElementById('settings-pane').style.display='flex';resizeOverlay()}
 function resizeOverlay(){if(!img.complete||img.naturalWidth===0)return;const pane=document.getElementById('preview-pane').getBoundingClientRect(),imgRatio=img.naturalWidth/img.naturalHeight,paneRatio=pane.width/pane.height;let width,height,top,left;if(imgRatio>paneRatio){width=pane.width;height=width/imgRatio;left=0;top=(pane.height-height)/2}else{height=pane.height;width=height*imgRatio;top=0;left=(pane.width-width)/2}overlay.style.width=`${width}px`;overlay.style.height=`${height}px`;overlay.style.left=`${left}px`;overlay.style.top=`${top}px`;if(!streamInterval)renderPreviewWidgets()}
 function sortedWidgetNames(){return Object.keys(config.widget_positions||{}).sort((a,b)=>((config.widget_positions[a]?.z||0)-(config.widget_positions[b]?.z||0))||a.localeCompare(b))}
-function renderPreviewWidgets(){overlay.innerHTML='';if(!config.widget_positions)return;for(const name of sortedWidgetNames()){const pos=config.widget_positions[name];if((pos.page||'default')!==(config.active_page||'default'))continue;const el=document.createElement('div');el.className='widget-box';if(pos.locked)el.classList.add('locked');const status=meta.widget_statuses?.[name]||'';el.textContent=status?`${name} [${status}]`:name;el.dataset.name=name;el.style.left=`${(pos.x||0)*100}%`;el.style.top=`${(pos.y||0)*100}%`;el.style.width=`${(pos.width||0.18)*overlay.clientWidth}px`;el.style.height=`${(pos.height||0.08)*overlay.clientHeight}px`;el.style.zIndex=String(pos.z||0);if(pos.anchor==='center')el.style.transform='translate(-50%, -50%)';else if(pos.anchor==='ne')el.style.transform='translate(-100%, 0)';else if(pos.anchor==='se')el.style.transform='translate(-100%, -100%)';else if(pos.anchor==='sw')el.style.transform='translate(0, -100%)';el.onmousedown=startDrag;overlay.appendChild(el)}}
+function renderPreviewWidgets(){overlay.innerHTML='';if(!config.widget_positions)return;for(const name of sortedWidgetNames()){const pos=config.widget_positions[name];if((pos.page||'default')!==(config.active_page||'default'))continue;const el=document.createElement('div');el.className='widget-box';if(pos.locked)el.classList.add('locked');if(name===selectedWidgetName)el.classList.add('active');el.textContent=humanizeKey(name);el.dataset.name=name;el.style.left=`${(pos.x||0)*100}%`;el.style.top=`${(pos.y||0)*100}%`;el.style.width=`${(pos.width||0.18)*overlay.clientWidth}px`;el.style.height=`${(pos.height||0.08)*overlay.clientHeight}px`;el.style.zIndex=String(pos.z||0);if(pos.anchor==='center')el.style.transform='translate(-50%, -50%)';else if(pos.anchor==='ne')el.style.transform='translate(-100%, 0)';else if(pos.anchor==='se')el.style.transform='translate(-100%, -100%)';else if(pos.anchor==='sw')el.style.transform='translate(0, -100%)';el.onmousedown=startDrag;overlay.appendChild(el)}}
 function startDrag(e){const name=e.currentTarget.dataset.name;if((config.widget_positions?.[name]||{}).locked)return;draggedEl=e.currentTarget;draggedEl.classList.add('active');e.preventDefault()}
 document.addEventListener('mousemove',e=>{if(!draggedEl)return;const r=overlay.getBoundingClientRect();let x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;x=Math.max(0,Math.min(1,x));y=Math.max(0,Math.min(1,y));const name=draggedEl.dataset.name;config.widget_positions[name].x=x;config.widget_positions[name].y=y;config.widget_positions[name].anchor='nw';renderPreviewWidgets()});document.addEventListener('mouseup',()=>{if(!draggedEl)return;draggedEl.classList.remove('active');draggedEl=null});
 function createSection(title){const s=document.createElement('div');s.className='section';const h=document.createElement('h2');h.textContent=title;s.appendChild(h);return s}
 function addField(container,label,builder){const g=document.createElement('div');g.className='form-group';const l=document.createElement('label');l.textContent=label;g.appendChild(l);g.appendChild(builder());container.appendChild(g)}
-function buildSelect(options,value,onChange,allowBlank=false){const s=document.createElement('select');if(allowBlank){const b=document.createElement('option');b.value='';b.textContent='';s.appendChild(b)}(options||[]).forEach(opt=>{const o=document.createElement('option');o.value=opt;o.textContent=opt;if(String(opt)===String(value))o.selected=true;s.appendChild(o)});s.onchange=onChange;return s}
-function buildInput(type,value,onChange){const i=document.createElement('input');i.type=type;if(type==='checkbox')i.checked=!!value;else i.value=value??'';i.onchange=onChange;return i}
-function createGenericValueEditor(value,onChange,options={}){if(Array.isArray(value)&&!options.forceJson){const i=document.createElement('textarea');i.value=value.join(', ');i.onchange=e=>onChange(e.target.value.split(',').map(v=>v.trim()).filter(Boolean));return i}if(typeof value==='boolean')return buildInput('checkbox',value,e=>onChange(e.target.checked));if(typeof value==='number')return buildInput('number',value,e=>onChange(parseFloat(e.target.value)));if((typeof value==='object'&&value!==null)||options.forceJson){const i=document.createElement('textarea');i.value=JSON.stringify(value??[],null,2);i.onchange=e=>{try{onChange(JSON.parse(e.target.value));e.target.style.borderColor='#424242'}catch(_){e.target.style.borderColor='#d9534f'}};return i}return buildInput('text',value??'',e=>onChange(e.target.value))}
+function buildSelect(options,value,onChange,allowBlank=false){const s=document.createElement('select');if(allowBlank){const b=document.createElement('option');b.value='';b.textContent='Select...';s.appendChild(b)}(options||[]).forEach(opt=>{const data=typeof opt==='object'?opt:{value:opt,label:opt},o=document.createElement('option');o.value=data.value;o.textContent=data.label;if(String(data.value)===String(value))o.selected=true;s.appendChild(o)});s.onchange=e=>{onChange(e);setDirty()};return s}
+function buildInput(type,value,onChange){const i=document.createElement('input');if(value==='__CONFIGURED__'){i.type='password';i.value=value;i.title='Configured. Enter a new value to replace it.'}else{i.type=type;if(type==='checkbox')i.checked=!!value;else i.value=value??''}i.onchange=e=>{onChange(e);setDirty()};return i}
+function createGenericValueEditor(value,onChange,options={}){if(Array.isArray(value)&&!options.forceJson){const i=document.createElement('textarea');i.value=value.join(', ');i.onchange=e=>{onChange(e.target.value.split(',').map(v=>v.trim()).filter(Boolean));setDirty()};return i}if(typeof value==='boolean')return buildInput('checkbox',value,e=>onChange(e.target.checked));if(typeof value==='number')return buildInput('number',value,e=>onChange(parseFloat(e.target.value)));if((typeof value==='object'&&value!==null)||options.forceJson){const i=document.createElement('textarea');i.value=JSON.stringify(value??[],null,2);i.onchange=e=>{try{onChange(JSON.parse(e.target.value));e.target.style.borderColor='';setDirty()}catch(_){e.target.style.borderColor='#d9534f'}};return i}return buildInput('text',value??'',e=>onChange(e.target.value))}
 function renderGeneralTab(){/*__GENERAL__*/}
 function renderAppearanceTab(){/*__APPEARANCE__*/}
 function renderWidgetsTab(){/*__WIDGETS__*/}
 function renderDiagnosticsTab(){/*__DIAGNOSTICS__*/}
-function renderAll(){renderGeneralTab();renderAppearanceTab();renderWidgetsTab();renderDiagnosticsTab();renderPreviewWidgets()}
-img.onload=resizeOverlay;window.onresize=resizeOverlay;document.addEventListener('keydown',e=>{if(e.key==='Escape')closeFullscreen()});setInterval(()=>{if(!draggedEl&&!streamInterval)refreshPreview()},5000);loadState();
+function renderActiveTab(){if(activeTab==='general')renderGeneralTab();else if(activeTab==='appearance')renderAppearanceTab();else if(activeTab==='widgets')renderWidgetsTab();else renderDiagnosticsTab()}
+function renderAll(){renderActiveTab();renderPreviewWidgets()}
+img.onload=resizeOverlay;window.onresize=resizeOverlay;document.addEventListener('keydown',e=>{if(e.key==='Escape')closeFullscreen();if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveConfig()}});setInterval(()=>{if(!draggedEl&&!streamInterval)refreshPreview()},10000);loadState();
 </script></body></html>
 """
 
@@ -161,8 +168,49 @@ def _list_profiles():
     return sorted(os.path.splitext(name)[0] for name in os.listdir(_profiles_dir()) if name.lower().endswith(".json"))
 
 
+def _redact_config(config):
+    safe = json.loads(json.dumps(config))
+    for key in list(safe):
+        if key.lower() in SENSITIVE_KEYS and safe.get(key):
+            safe[key] = REDACTED_VALUE
+
+    for widget_name, settings in safe.get("widget_settings", {}).items():
+        if not isinstance(settings, dict):
+            continue
+        for key in list(settings):
+            if key.lower() in SENSITIVE_KEYS and settings.get(key):
+                settings[key] = REDACTED_VALUE
+
+        widget_type = widget_name.split("_", 1)[0]
+        if widget_type == "ical":
+            for feed in settings.get("feeds", []):
+                if isinstance(feed, dict) and feed.get("url"):
+                    feed["url"] = REDACTED_VALUE
+        if widget_type in {"commute", "dailyagenda"} and isinstance(settings.get("urls"), list):
+            settings["urls"] = [REDACTED_VALUE if url else url for url in settings["urls"]]
+    return safe
+
+
+def _restore_redacted_values(incoming, current):
+    if incoming == REDACTED_VALUE:
+        return json.loads(json.dumps(current))
+    if isinstance(incoming, dict):
+        current_dict = current if isinstance(current, dict) else {}
+        return {
+            key: _restore_redacted_values(value, current_dict.get(key))
+            for key, value in incoming.items()
+        }
+    if isinstance(incoming, list):
+        current_list = current if isinstance(current, list) else []
+        return [
+            _restore_redacted_values(value, current_list[index] if index < len(current_list) else None)
+            for index, value in enumerate(incoming)
+        ]
+    return incoming
+
+
 def _safe_copy_config(app):
-    return json.loads(json.dumps(app.config))
+    return _redact_config(app.config)
 
 
 def _client_is_loopback(client_address):
@@ -212,7 +260,15 @@ def _build_state(app):
             "diagnostics_lines": _build_diagnostics(app),
             "background_mode_options": ["None"] + [f"Camera {i}" for i in app.detect_available_cameras()] + ["Camera", "Image", "Video", "YouTube"],
             "youtube_quality_options": ["Best Available", "1080p", "720p", "480p"],
-            "feed_refresh_options": ["900000", "1800000", "3600000", "7200000", "21600000", "43200000", "86400000"],
+            "feed_refresh_options": [
+                {"value": "900000", "label": "15 minutes"},
+                {"value": "1800000", "label": "30 minutes"},
+                {"value": "3600000", "label": "1 hour"},
+                {"value": "7200000", "label": "2 hours"},
+                {"value": "21600000", "label": "6 hours"},
+                {"value": "43200000", "label": "12 hours"},
+                {"value": "86400000", "label": "24 hours"},
+            ],
         },
     }
 
@@ -311,11 +367,29 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
         token = self._configured_token()
         if not token or _client_is_loopback(self.client_address):
             return True
-        return self._request_token(parsed) == token
+        request_token = self._request_token(parsed)
+        return bool(request_token) and secrets.compare_digest(request_token, token)
+
+    def _send_security_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'",
+        )
+
+    def _origin_is_allowed(self):
+        origin = self.headers.get("Origin", "").strip()
+        if not origin:
+            return True
+        host = self.headers.get("Host", "").strip().lower()
+        return urlparse(origin).netloc.lower() == host
 
     def _send_json(self, status, payload):
         self.send_response(status)
         self.send_header("Content-type", "application/json")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode("utf-8"))
 
@@ -332,6 +406,18 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             self.send_error(401, "Unauthorized")
             return
         if parsed.path == "/":
+            query_token = (parse_qs(parsed.query).get("token") or [""])[0].strip()
+            configured_token = self._configured_token()
+            if query_token and configured_token and secrets.compare_digest(query_token, configured_token):
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header(
+                    "Set-Cookie",
+                    f"magicmirror_token={query_token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000",
+                )
+                self._send_security_headers()
+                self.end_headers()
+                return
             html = HTML_TEMPLATE.replace("__THEME_PRESETS__", json.dumps(THEME_PRESETS)).replace("__ACCESSIBILITY_PRESETS__", json.dumps(ACCESSIBILITY_PRESETS))
             html = html.replace("/*__GENERAL__*/", self.server.general_js)
             html = html.replace("/*__APPEARANCE__*/", self.server.appearance_js)
@@ -339,10 +425,7 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             html = html.replace("/*__DIAGNOSTICS__*/", self.server.diagnostics_js)
             self.send_response(200)
             self.send_header("Content-type", "text/html")
-            token = self._request_token(parsed)
-            if token and token == self._configured_token():
-                self.send_header("Set-Cookie", "magicmirror_token=; Max-Age=0; Path=/")
-                self.send_header("Set-Cookie", f"magicmirror_token={token}; HttpOnly; SameSite=Strict; Path=/")
+            self._send_security_headers()
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
             return
@@ -359,6 +442,9 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
         if not self._is_authorized(parsed):
             self.send_error(401, "Unauthorized")
             return
+        if not self._origin_is_allowed():
+            self.send_error(403, "Origin not allowed")
+            return
         try:
             payload = self._read_json_payload()
         except Exception as e:
@@ -366,7 +452,8 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/config":
             try:
-                validated = self.server.app.normalized_config(payload)
+                restored = _restore_redacted_values(payload, self.server.app.config)
+                validated = self.server.app.normalized_config(restored)
                 self.server.app.call_on_ui_thread(lambda: self.server.app.replace_remote_config(validated), timeout=15)
                 self._send_json(200, {"status": "ok"})
             except Exception as e:
@@ -385,10 +472,14 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def handle_preview(self):
-        img_bytes = self.server.app.get_preview_image()
+        img_bytes = self.server.app.call_on_ui_thread(
+            self.server.app.capture_preview_image,
+            timeout=5,
+        )
         if img_bytes:
             self.send_response(200)
             self.send_header("Content-type", "image/jpeg")
+            self._send_security_headers()
             self.end_headers()
             self.wfile.write(img_bytes)
         else:
@@ -398,7 +489,8 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
         pass
 
 
-class MagicMirrorServer(HTTPServer):
+class MagicMirrorServer(ThreadingHTTPServer):
+    daemon_threads = True
     def __init__(self, server_address, request_handler_class, app):
         super().__init__(server_address, request_handler_class)
         self.app = app

@@ -15,6 +15,7 @@ import random
 import socket
 import textwrap
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 # Try to import psutil for system stats
 try:
@@ -420,9 +421,12 @@ class BaseWidget:
             finally:
                 self.refresh_in_progress = False
 
-        thread = threading.Thread(target=worker)
-        thread.daemon = True
-        thread.start()
+        executor = getattr(app, "_widget_executor", None)
+        if executor is not None:
+            executor.submit(worker)
+        else:
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
         return True
 
     def get_diagnostics(self):
@@ -1689,6 +1693,8 @@ class WidgetManager:
         self.app = app
         self.config = config
         self.widgets = {}
+        self.executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="mirror-widget")
+        self.app._widget_executor = self.executor
         self.load_widgets()
 
     def load_widgets(self):
@@ -1710,6 +1716,8 @@ class WidgetManager:
             self.widgets[widget_name] = WIDGET_CLASSES[widget_type](self.config, widget_name)
 
         self.start_updates(self.app)
+        if hasattr(self.app, "configure_ticker_timer"):
+            self.app.configure_ticker_timer()
 
     def start_updates(self, app):
         for widget in self.widgets.values():
@@ -1720,12 +1728,19 @@ class WidgetManager:
             try:
                 if widget.update_timer and hasattr(widget.update_timer, "stop"):
                     widget.update_timer.stop()
+                    widget.update_timer.deleteLater()
+                    widget.update_timer = None
             except Exception as e:
                 print("stop_updates error:", e)
 
     def restart_updates(self):
         self.stop_updates()
         self.start_updates(self.app)
+
+    def shutdown(self):
+        self.stop_updates()
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        self.app._widget_executor = None
 
     def draw_all(self, painter, app):
         for widget_name in app.get_sorted_widget_names():

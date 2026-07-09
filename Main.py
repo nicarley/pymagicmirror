@@ -272,7 +272,7 @@ QTabBar::tab:hover {
 QGroupBox {
     background: #ffffff;
     border: 1px solid #d8e0e8;
-    border-radius: 10px;
+    border-radius: 8px;
     color: #202833;
     font-weight: 600;
     margin-top: 20px;
@@ -311,18 +311,35 @@ QSplitter::handle {
     background: #d8e0e8;
 }
 QPushButton {
-    background: #2f8f6b;
-    border: 1px solid #3ca77e;
+    background: #e4eaf0;
+    border: 1px solid #ccd6df;
     border-radius: 8px;
-    color: #ffffff;
+    color: #263340;
     font-weight: 600;
     padding: 9px 14px;
 }
 QPushButton:hover {
-    background: #39a67c;
+    background: #d8e1e9;
+    border-color: #b9c7d3;
 }
 QPushButton:pressed {
-    background: #267657;
+    background: #cbd6df;
+}
+QPushButton#primaryButton {
+    background: #2f8f6b;
+    border-color: #3ca77e;
+    color: #ffffff;
+}
+QPushButton#primaryButton:hover {
+    background: #39a67c;
+}
+QPushButton#dangerButton {
+    background: #fff3f2;
+    border-color: #e4aaa6;
+    color: #a63f39;
+}
+QPushButton#dangerButton:hover {
+    background: #fbe3e1;
 }
 QPushButton:disabled {
     background: #dde3ea;
@@ -740,7 +757,7 @@ class OnboardingDialog(QDialog):
         if self.parent and hasattr(self.parent, "get_available_template_names"):
             self.template_combo.addItems(self.parent.get_available_template_names())
         else:
-            self.template_combo.addItems(["Minimal Clock", "Daily Dashboard", "News Wall"])
+            self.template_combo.addItems(["Today", "Minimal Clock", "Daily Dashboard", "News Wall"])
         form.addRow("Starter Template:", self.template_combo)
 
         layout.addLayout(form)
@@ -780,7 +797,8 @@ class SettingsDialog(QDialog):
         self.parent = parent
         self.original_config = json.loads(json.dumps(parent.config))
         self.config = parent.config
-        self.setMinimumSize(1100, 760)
+        self.setMinimumSize(1120, 760)
+        self.resize(1240, 820)
         self.setStyleSheet(DESKTOP_DIALOG_QSS)
 
         self.layout = QVBoxLayout(self)
@@ -824,6 +842,7 @@ class SettingsDialog(QDialog):
         self.setup_diagnostics_tab()
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton")
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         self.layout.addWidget(self.button_box)
@@ -949,8 +968,6 @@ class SettingsDialog(QDialog):
         self.volume_spin.valueChanged.connect(self.live_update_background_volume)
         cam_layout.addRow("Background Volume:", self.volume_spin)
         
-        layout.addWidget(cam_group)
-        
         # Initial UI state update
         self.update_background_ui_state()
 
@@ -998,7 +1015,11 @@ class SettingsDialog(QDialog):
         self.snap_check.stateChanged.connect(self.live_update_snap_to_grid)
         sys_layout.addRow("", self.snap_check)
 
-        layout.addWidget(sys_group)
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(16)
+        primary_row.addWidget(cam_group, 3)
+        primary_row.addWidget(sys_group, 2)
+        layout.addLayout(primary_row)
 
         # Profiles / Backup Group
         profile_group = QGroupBox("Profiles")
@@ -1970,17 +1991,12 @@ class SettingsDialog(QDialog):
         left_layout.addWidget(active_label)
         self.widget_list = QListWidget()
         self.widget_list.currentItemChanged.connect(self.display_widget_settings)
-        left_layout.addWidget(self.widget_list)
+        left_layout.addWidget(self.widget_list, 1)
         
         # Add/Remove Controls
         controls_group = QGroupBox("Manage Widgets")
         controls_layout = QVBoxLayout(controls_group)
         controls_layout.setSpacing(14)
-
-        # Widget Actions Group
-        actions_group = QGroupBox("Widget Actions")
-        actions_layout = QVBoxLayout(actions_group)
-        actions_layout.setSpacing(14)
 
         add_row = QHBoxLayout()
         self.widget_combo = QComboBox()
@@ -1988,20 +2004,20 @@ class SettingsDialog(QDialog):
         self.widget_combo.addItems(visible_widget_types)
         add_row.addWidget(self.widget_combo, 1)
         self.add_button = QPushButton("Add")
+        self.add_button.setObjectName("primaryButton")
         self.add_button.clicked.connect(self.add_widget)
         add_row.addWidget(self.add_button)
-        actions_layout.addLayout(add_row)
+        controls_layout.addLayout(add_row)
 
         btn_row = QHBoxLayout()
         self.remove_button = QPushButton("Remove")
+        self.remove_button.setObjectName("dangerButton")
         self.remove_button.clicked.connect(self.remove_widget)
         btn_row.addWidget(self.remove_button)
         self.rename_button = QPushButton("Rename")
         self.rename_button.clicked.connect(self.rename_widget)
         btn_row.addWidget(self.rename_button)
-        actions_layout.addLayout(btn_row)
-
-        controls_layout.addWidget(actions_group)
+        controls_layout.addLayout(btn_row)
 
         self.widget_search = QLineEdit()
         self.widget_search.setPlaceholderText("Search widget types...")
@@ -2042,7 +2058,7 @@ class SettingsDialog(QDialog):
         right_layout.addWidget(self.scroll_area)
         splitter.addWidget(right_widget)
         
-        splitter.setSizes([330, 720])
+        splitter.setSizes([380, 760])
         self.refresh_widget_list()
 
     def refresh_widget_list(self):
@@ -3242,16 +3258,11 @@ class MagicMirrorApp(QMainWindow):
         self.set_fullscreen(self.config.get("fullscreen", True))
         self.apply_performance_settings()
         
-        # Ticker timer
+        # Tickers animate independently from static mirror content.
         self.ticker_timer = QTimer(self)
         self.ticker_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.ticker_timer.timeout.connect(self.update_tickers)
-        self.ticker_timer.start(30)
-
-        # Preview capture timer for thread-safe streaming
-        self.preview_capture_timer = QTimer(self)
-        self.preview_capture_timer.timeout.connect(self.update_preview_image)
-        self.preview_capture_timer.start(100) # Capture at 10 FPS
+        self.configure_ticker_timer()
 
         self.scene_scheduler_timer = QTimer(self)
         self.scene_scheduler_timer.timeout.connect(self.apply_scene_schedule)
@@ -3263,14 +3274,18 @@ class MagicMirrorApp(QMainWindow):
             self.start_web_server()
         self.show_onboarding_if_needed()
 
-    @staticmethod
-    def detect_available_cameras():
+    def detect_available_cameras(self, force=False):
+        now = time.monotonic()
+        cached = getattr(self, "_camera_detection_cache", None)
+        if not force and cached and now - cached[0] < 30:
+            return list(cached[1])
         available = []
         for i in range(10):
             cap = cv2.VideoCapture(i)
             if cap.isOpened():
                 available.append(i)
-                cap.release()
+            cap.release()
+        self._camera_detection_cache = (now, list(available))
         return available
 
     def is_camera_active(self):
@@ -3362,6 +3377,24 @@ class MagicMirrorApp(QMainWindow):
         if mode in ("Video", "YouTube") and source_fps >= 50:
             return min(60, max(configured_fps, int(round(source_fps))))
         return configured_fps
+
+    def is_dynamic_background(self):
+        return self.config.get("background_mode", "Camera") in {"Camera", "Video", "YouTube"}
+
+    def has_active_tickers(self):
+        for widget_name in self.widget_manager.widgets:
+            settings = self.config.get("widget_settings", {}).get(widget_name, {})
+            if settings.get("style") == "Ticker" and self.widget_is_visible(widget_name):
+                return True
+        return False
+
+    def configure_ticker_timer(self):
+        if not hasattr(self, "ticker_timer"):
+            return
+        if self.has_active_tickers():
+            self.ticker_timer.start(80 if self.config.get("low_power_mode", False) else 50)
+        else:
+            self.ticker_timer.stop()
 
     def configure_capture(self):
         if not self.cap or not self.cap.isOpened():
@@ -3593,6 +3626,7 @@ class MagicMirrorApp(QMainWindow):
 
     def get_builtin_template_map(self):
         return {
+            "Today": ["time", "date", "weatherforecast", "dailyagenda"],
             "Minimal Clock": ["time", "date"],
             "Daily Dashboard": ["time", "date", "weatherforecast", "dailyagenda", "commute"],
             "News Wall": ["time", "date", "rss"],
@@ -3666,6 +3700,16 @@ class MagicMirrorApp(QMainWindow):
                     QMessageBox.warning(self, "Template Error", f"Could not load template '{template_name}':\n{e}")
                     return
 
+        template_positions = {
+            "Today": {
+                "time": (0.05, 0.06),
+                "date": (0.05, 0.17),
+                "weatherforecast": (0.72, 0.06),
+                "dailyagenda": (0.05, 0.34),
+            },
+            "Minimal Clock": {"time": (0.05, 0.06), "date": (0.05, 0.17)},
+            "News Wall": {"time": (0.05, 0.06), "date": (0.05, 0.17), "rss": (0.58, 0.18)},
+        }
         for idx, wtype in enumerate(template_map.get(template_name, []), start=1):
             existing = [name for name in self.config.get("widget_positions", {}) if name.startswith(f"{wtype}_")]
             if existing:
@@ -3674,8 +3718,12 @@ class MagicMirrorApp(QMainWindow):
             if name:
                 col = (idx - 1) % 3
                 row = (idx - 1) // 3
-                self.config["widget_positions"][name]["x"] = 0.2 + col * 0.3
-                self.config["widget_positions"][name]["y"] = 0.2 + row * 0.25
+                x, y = template_positions.get(template_name, {}).get(
+                    wtype,
+                    (0.08 + col * 0.3, 0.1 + row * 0.25),
+                )
+                self.config["widget_positions"][name]["x"] = x
+                self.config["widget_positions"][name]["y"] = y
                 self.config["widget_positions"][name]["anchor"] = "nw"
         self.widget_manager.load_widgets()
         self.central_widget.update()
@@ -3698,12 +3746,11 @@ class MagicMirrorApp(QMainWindow):
         if self.config.get("low_power_mode", False):
             self.config["feed_refresh_interval_ms"] = max(3600000, int(self.config.get("feed_refresh_interval_ms", 3600000)))
         interval_ms = max(1, int(1000 / max(1, fps)))
-        if hasattr(self, "timer") and self.timer:
+        if self.is_dynamic_background() and hasattr(self, "timer") and self.timer:
             self.timer.start(interval_ms)
-        if hasattr(self, "preview_capture_timer") and self.preview_capture_timer:
-            self.preview_capture_timer.start(200 if self.config.get("low_power_mode", False) else 100)
-        if hasattr(self, "ticker_timer") and self.ticker_timer:
-            self.ticker_timer.start(50 if self.config.get("low_power_mode", False) else 30)
+        elif hasattr(self, "timer") and self.timer:
+            self.timer.stop()
+        self.configure_ticker_timer()
 
     def push_undo_snapshot(self):
         snapshot = json.loads(json.dumps(self.config.get("widget_positions", {})))
@@ -3736,7 +3783,7 @@ class MagicMirrorApp(QMainWindow):
     def get_default_config():
         return {
             "camera_index": 0,
-            "background_mode": "Camera",
+            "background_mode": "None",
             "background_file": "",
             "youtube_quality": "Best Available",
             "background_fit_mode": "fill",
@@ -3755,12 +3802,12 @@ class MagicMirrorApp(QMainWindow):
             "widget_settings": {},
             "layout_pages": list(DEFAULT_LAYOUT_PAGES),
             "active_page": "default",
-            "text_color": [255, 255, 255],
-            "text_shadow_color": [0, 0, 0],
-            "background_color": [0, 0, 0],
+            "text_color": [236, 242, 248],
+            "text_shadow_color": [4, 6, 10],
+            "background_color": [10, 12, 15],
             "FMP_API_KEY": "YOUR_FMP_API_KEY",
-            "font_family": "Helvetica",
-            "background_opacity": 0.0,
+            "font_family": "Segoe UI",
+            "background_opacity": 0.35,
             "web_server_enabled": False,
             "web_server_host": "127.0.0.1",
             "web_server_port": 815,
@@ -4122,6 +4169,7 @@ class MagicMirrorApp(QMainWindow):
             changed = True
 
         if changed:
+            self.configure_ticker_timer()
             self.central_widget.update()
             self.save_config()
 
@@ -4160,6 +4208,8 @@ class MagicMirrorApp(QMainWindow):
         mode = self.config.get("background_mode", "Camera")
         had_error = False
         self.source_fps = 0.0
+        if hasattr(self, "timer") and self.timer:
+            self.timer.stop()
         if self.media_backend is not None:
             self.media_backend.stop()
         self.media_backend = None
@@ -4169,10 +4219,8 @@ class MagicMirrorApp(QMainWindow):
 
         if mode == "None":
             self.central_widget.set_pixmap(QPixmap())
-            # Stop timer? Or keep it for widgets?
-            # The timer calls update_camera_feed which calls central_widget.update() if no camera.
-            # So widgets are drawn.
             self.clear_error_message()
+            self.central_widget.update()
             return
 
         if mode == "Camera":
@@ -4261,10 +4309,12 @@ class MagicMirrorApp(QMainWindow):
                 self.show_error("No YouTube URL provided")
                 had_error = True
 
-        # Ensure timer is running
-        if not hasattr(self, "timer") or not self.timer.isActive():
-            self.timer = QTimer(self)
-            self.timer.timeout.connect(self.update_camera_feed)
+        if mode == "Image" and not had_error:
+            self.update_camera_feed()
+        elif self.is_dynamic_background() and self.media_backend is not None and not had_error:
+            if not hasattr(self, "timer") or self.timer is None:
+                self.timer = QTimer(self)
+                self.timer.timeout.connect(self.update_camera_feed)
             fps = self.get_target_render_fps()
             self.timer.start(max(1, int(1000 / fps)))
             
@@ -4296,7 +4346,27 @@ class MagicMirrorApp(QMainWindow):
         self.edit_button.clicked.connect(self.toggle_edit_mode)
         self.edit_button.setStyleSheet(OVERLAY_BUTTON_QSS)
         self.edit_button.setFixedSize(108, 36)
+        self.overlay_hide_timer = QTimer(self)
+        self.overlay_hide_timer.setSingleShot(True)
+        self.overlay_hide_timer.timeout.connect(self.hide_overlay_controls)
         self.refresh_overlay_buttons()
+        self.show_overlay_controls()
+
+    def show_overlay_controls(self):
+        if not hasattr(self, "settings_button"):
+            return
+        self.settings_button.show()
+        self.edit_button.show()
+        self.settings_button.raise_()
+        self.edit_button.raise_()
+        if not self.edit_mode:
+            self.overlay_hide_timer.start(6000)
+
+    def hide_overlay_controls(self):
+        if self.edit_mode:
+            return
+        self.settings_button.hide()
+        self.edit_button.hide()
 
     def refresh_overlay_buttons(self):
         if not hasattr(self, "settings_button") or not hasattr(self, "edit_button"):
@@ -4309,10 +4379,7 @@ class MagicMirrorApp(QMainWindow):
         self.settings_button.move(x + self.edit_button.width() + gap, margin)
         self.edit_button.setText("Done" if self.edit_mode else "Edit Layout")
         self.edit_button.setStyleSheet(OVERLAY_BUTTON_ACTIVE_QSS if self.edit_mode else OVERLAY_BUTTON_QSS)
-        self.settings_button.show()
-        self.edit_button.show()
-        self.settings_button.raise_()
-        self.edit_button.raise_()
+        self.show_overlay_controls()
 
     def update_camera_feed(self):
         mode = self.config.get("background_mode", "Camera")
@@ -4394,6 +4461,8 @@ class MagicMirrorApp(QMainWindow):
         now_monotonic = time.perf_counter()
         with QMutexLocker(self.config_mutex):
             for widget_name, widget in self.widget_manager.widgets.items():
+                if not self.widget_is_visible(widget_name):
+                    continue
                 settings = self.config.get("widget_settings", {}).get(widget_name, {})
                 if settings.get("style") == "Ticker":
                     speed_setting = max(1, int(settings.get("ticker_speed", 2)))
@@ -4406,6 +4475,8 @@ class MagicMirrorApp(QMainWindow):
         
         if needs_update:
             self.central_widget.update()
+        else:
+            self.ticker_timer.stop()
 
     def draw_all_widgets(self, painter):
         with QMutexLocker(self.config_mutex):
@@ -5033,6 +5104,7 @@ class MagicMirrorApp(QMainWindow):
         self.open_settings_dialog(widget_name=widget_name, widget_tab=True)
 
     def central_widget_mouse_move(self, event):
+        self.show_overlay_controls()
         if self.edit_mode and self.drag_data["widget"] and event.buttons() & Qt.MouseButton.LeftButton:
             delta = event.position().toPoint() - self.drag_data["start_pos"]
             if self.central_widget.width() == 0 or self.central_widget.height() == 0:
@@ -5084,11 +5156,13 @@ class MagicMirrorApp(QMainWindow):
             self.set_fullscreen(not self.isFullScreen())
         elif event.key() == Qt.Key.Key_E:
             self.toggle_edit_mode()
+        elif event.key() == Qt.Key.Key_S:
+            self.open_settings_dialog()
 
     def open_settings_dialog(self, widget_name=None, widget_tab=False):
         dialog = SettingsDialog(self)
         if widget_tab or self.sender() == self.edit_button:
-            dialog.tabs.setCurrentIndex(2)
+            dialog.tabs.setCurrentWidget(dialog.widget_tab)
         if widget_name:
             dialog.refresh_widget_list()
             for i in range(dialog.widget_list.count()):
@@ -5100,6 +5174,8 @@ class MagicMirrorApp(QMainWindow):
 
     def toggle_edit_mode(self):
         self.edit_mode = not self.edit_mode
+        if self.edit_mode:
+            self.overlay_hide_timer.stop()
         self.edit_button.setChecked(self.edit_mode)
         if not self.edit_mode:
             self.widget_delete_hitboxes = {}
@@ -5127,21 +5203,40 @@ class MagicMirrorApp(QMainWindow):
     def after(self, ms, func):
         t = QTimer(self)
         t.setSingleShot(True)
-        t.timeout.connect(func)
+
+        def run_and_dispose():
+            try:
+                func()
+            finally:
+                t.deleteLater()
+
+        t.timeout.connect(run_and_dispose)
         t.start(ms)
         return t
 
-    def update_preview_image(self):
+    def capture_preview_image(self):
         if not self.central_widget:
-            return
+            return None
         
         pixmap = self.central_widget.grab()
+        if pixmap.width() > 1280 or pixmap.height() > 720:
+            pixmap = pixmap.scaled(
+                1280,
+                720,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         byte_array = QBuffer()
         byte_array.open(QIODevice.OpenModeFlag.WriteOnly)
-        pixmap.save(byte_array, "JPG")
+        pixmap.save(byte_array, "JPG", 72)
+        image_data = byte_array.data().data()
         
         with QMutexLocker(self.preview_image_mutex):
-            self.preview_image_data = byte_array.data().data()
+            self.preview_image_data = image_data
+        return image_data
+
+    def update_preview_image(self):
+        return self.capture_preview_image()
 
     def get_preview_image(self):
         with QMutexLocker(self.preview_image_mutex):
@@ -5216,7 +5311,7 @@ class MagicMirrorApp(QMainWindow):
                 self.web_server = web_server.start_server(self, host=host, port=port)
                 print(f"Web server started on http://{host}:{port}.")
                 if self.config.get("web_server_token"):
-                    print(f"Remote access URL: http://{host}:{port}/?token={self.config.get('web_server_token')}")
+                    print("Remote web access is protected by the configured token.")
             except Exception as e:
                 print(f"Failed to start web server: {e}")
                 self.web_server = None
@@ -5230,10 +5325,11 @@ class MagicMirrorApp(QMainWindow):
     def closeEvent(self, event):
         self.stop_web_server()
 
+        if getattr(self, "widget_manager", None) is not None:
+            self.widget_manager.shutdown()
+
         if hasattr(self, "ticker_timer") and self.ticker_timer.isActive():
             self.ticker_timer.stop()
-        if hasattr(self, "preview_capture_timer") and self.preview_capture_timer.isActive():
-            self.preview_capture_timer.stop()
         if hasattr(self, "timer") and self.timer.isActive():
             self.timer.stop()
         if hasattr(self, "cap") and self.cap and self.cap.isOpened():

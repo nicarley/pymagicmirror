@@ -65,16 +65,10 @@ MagicMirror is a configurable smart mirror dashboard built with Python and PySid
 
 ## Install
 
-Create and activate a virtual environment, then install the core dependencies:
+Create and activate a virtual environment, then install the pinned application dependencies:
 
 ```bash
-pip install PySide6 opencv-python requests feedparser icalendar pytz certifi python-dateutil
-```
-
-Optional packages:
-
-```bash
-pip install yt-dlp psutil
+pip install -r requirements.txt
 ```
 
 Notes:
@@ -91,7 +85,7 @@ python Main.py
 
 ## Basic Usage
 
-- Open settings with the gear button.
+- Move the pointer to reveal the local controls, or press `S` to open settings.
 - Enter edit mode with `E`.
 - Toggle fullscreen with `F11`.
 - Exit fullscreen with `Esc`.
@@ -125,11 +119,21 @@ Most settings can be changed from either the desktop UI or the web manager, incl
 
 ## Web Manager
 
-The built-in web manager provides:
+The built-in web manager is the recommended way to maintain an installed mirror. It provides:
 
 - live preview
 - remote widget dragging
 - remote editing of general, appearance, widget, template, and profile settings
 - a diagnostics view with widget refresh status
 
-It is intended for trusted local networks. Do not expose it publicly without adding your own authentication and network protections.
+Credentials and private calendar URLs are redacted from browser-visible state. Non-loopback access automatically requires a token, but the server still uses HTTP and is intended for trusted local networks. Do not expose it directly to the public internet.
+
+## Verification
+
+Run the focused regression suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Create a Windows application bundle with `build_windows.cmd`. The build script uses the project virtual environment when available and does not contain machine-specific paths.
