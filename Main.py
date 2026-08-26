@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
     QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QPlainTextEdit
 )
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush, QPen
 from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal, QUrl, QThread
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import cv2
@@ -70,7 +70,195 @@ THEME_PRESETS = {
         "background_opacity": 0.18,
         "text_scale_multiplier": 1.0,
     },
+    "Midnight Glass": {
+        "background_color": [8, 8, 10],
+        "text_color": [248, 248, 250],
+        "text_shadow_color": [0, 0, 0],
+        "background_opacity": 0.16,
+        "text_scale_multiplier": 1.0,
+    },
 }
+
+
+APPLE_UI_STYLESHEET = """
+QDialog {
+    background-color: #151517;
+    color: #f5f5f7;
+}
+QDialog QLabel, QDialog QCheckBox, QDialog QRadioButton {
+    color: #f5f5f7;
+    background: transparent;
+}
+QLabel#dialogTitle {
+    color: #ffffff;
+    font-size: 26px;
+    font-weight: 650;
+}
+QLabel#dialogSubtitle {
+    color: #98989d;
+    font-size: 13px;
+}
+QLabel#contextCard {
+    color: #d7eaff;
+    background-color: #202933;
+    border: 1px solid #34475c;
+    border-radius: 12px;
+    padding: 12px 16px;
+}
+QGroupBox {
+    color: #f5f5f7;
+    background-color: #222225;
+    border: 1px solid #343438;
+    border-radius: 14px;
+    margin-top: 18px;
+    padding: 18px 14px 14px 14px;
+    font-size: 13px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 14px;
+    padding: 0 5px;
+    color: #f5f5f7;
+    background: #151517;
+}
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget {
+    color: #f5f5f7;
+    background-color: #2c2c2f;
+    border: 1px solid #46464b;
+    border-radius: 8px;
+    padding: 6px 9px;
+    selection-background-color: #0a84ff;
+    selection-color: white;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QListWidget:focus {
+    border: 1px solid #0a84ff;
+}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    color: #68686d;
+    background-color: #242427;
+    border-color: #303034;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox QAbstractItemView {
+    color: #f5f5f7;
+    background-color: #2c2c2f;
+    border: 1px solid #46464b;
+    selection-background-color: #0a84ff;
+    outline: none;
+}
+QPushButton {
+    color: #f5f5f7;
+    background-color: #3a3a3e;
+    border: 1px solid #505056;
+    border-radius: 8px;
+    padding: 7px 14px;
+    min-height: 20px;
+    font-weight: 550;
+}
+QPushButton:hover {
+    background-color: #48484d;
+    border-color: #626269;
+}
+QPushButton:pressed {
+    background-color: #303034;
+}
+QPushButton:disabled {
+    color: #6b6b70;
+    background-color: #29292c;
+    border-color: #343438;
+}
+QPushButton#primaryButton {
+    color: white;
+    background-color: #0a84ff;
+    border-color: #0a84ff;
+}
+QPushButton#primaryButton:hover { background-color: #2492ff; }
+QPushButton#primaryButton:pressed { background-color: #0071e3; }
+QTabWidget::pane {
+    background-color: #1c1c1f;
+    border: 1px solid #343438;
+    border-radius: 14px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: #a8a8ad;
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 16px;
+    margin: 4px 2px;
+    min-width: 84px;
+    font-weight: 550;
+}
+QTabBar::tab:hover {
+    color: #f5f5f7;
+    background-color: #2c2c30;
+}
+QTabBar::tab:selected {
+    color: white;
+    background-color: #0a84ff;
+}
+QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 4px 2px;
+}
+QScrollBar::handle:vertical {
+    background: #55555b;
+    border-radius: 4px;
+    min-height: 28px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QListWidget::item {
+    border-radius: 7px;
+    padding: 7px 9px;
+}
+QListWidget::item:hover { background-color: #38383c; }
+QListWidget::item:selected { background-color: #0a84ff; color: white; }
+QCheckBox { spacing: 9px; }
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #5b5b61;
+    border-radius: 5px;
+    background-color: #2c2c2f;
+}
+QCheckBox::indicator:checked {
+    background-color: #0a84ff;
+    border-color: #0a84ff;
+}
+QSlider::groove:horizontal {
+    background: #3a3a3e;
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal { background: #0a84ff; border-radius: 2px; }
+QSlider::handle:horizontal {
+    background: white;
+    border: 1px solid #b8b8bd;
+    width: 16px;
+    height: 16px;
+    margin: -7px 0;
+    border-radius: 8px;
+}
+QToolTip {
+    color: #f5f5f7;
+    background-color: #2c2c2f;
+    border: 1px solid #505056;
+    border-radius: 6px;
+    padding: 5px;
+}
+"""
 
 WIDGET_DISPLAY_NAMES = {
     "time": "Time",
@@ -539,14 +727,24 @@ class OnboardingDialog(QDialog):
         super().__init__(parent)
         self.parent = parent
         self.setWindowTitle("Welcome to Magic Mirror")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Quick setup"))
+        layout.setContentsMargins(28, 26, 28, 24)
+        layout.setSpacing(14)
+
+        title = QLabel("Make the mirror yours")
+        title.setObjectName("dialogTitle")
+        layout.addWidget(title)
+        subtitle = QLabel("Choose a few essentials now. You can fine-tune everything later in Settings.")
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
 
         form = QFormLayout()
 
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(list(THEME_PRESETS.keys()))
+        self.theme_combo.setCurrentText("Midnight Glass")
         form.addRow("Theme:", self.theme_combo)
 
         self.fullscreen_check = QCheckBox("Start in fullscreen")
@@ -613,18 +811,29 @@ class OnboardingDialog(QDialog):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Settings and Widgets")
+        self.setWindowTitle("Magic Mirror Settings")
         self.parent = parent
         self.original_config = json.loads(json.dumps(parent.config))
         self.config = parent.config
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(1040, 720)
 
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(24, 22, 24, 20)
+        self.layout.setSpacing(14)
+
+        self.title_label = QLabel("Magic Mirror")
+        self.title_label.setObjectName("dialogTitle")
+        self.layout.addWidget(self.title_label)
+        self.subtitle_label = QLabel("Shape what you see, when you see it, and how it feels in the room.")
+        self.subtitle_label.setObjectName("dialogSubtitle")
+        self.layout.addWidget(self.subtitle_label)
+
         self.context_header = QLabel()
         self.context_header.setWordWrap(True)
-        self.context_header.setStyleSheet("padding:8px 10px; background:#222; color:#eee; border-radius:6px;")
+        self.context_header.setObjectName("contextCard")
         self.layout.addWidget(self.context_header)
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
         self.layout.addWidget(self.tabs)
 
         self.general_tab = QWidget()
@@ -639,7 +848,7 @@ class SettingsDialog(QDialog):
 
         self.pages_tab = QWidget()
         self.pages_layout = QVBoxLayout(self.pages_tab)
-        self.tabs.addTab(self.pages_tab, "Pages")
+        self.tabs.addTab(self.pages_tab, "Layout")
         self.setup_pages_tab()
 
         self.widget_tab = QWidget()
@@ -649,7 +858,7 @@ class SettingsDialog(QDialog):
 
         self.issues_tab = QWidget()
         self.issues_layout = QVBoxLayout(self.issues_tab)
-        self.tabs.addTab(self.issues_tab, "Issues")
+        self.tabs.addTab(self.issues_tab, "Health")
         self.setup_issues_tab()
 
         self.diagnostics_tab = QWidget()
@@ -660,6 +869,9 @@ class SettingsDialog(QDialog):
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
+        save_button = self.button_box.button(QDialogButtonBox.StandardButton.Save)
+        if save_button:
+            save_button.setObjectName("primaryButton")
         self.layout.addWidget(self.button_box)
         self.refresh_context_header()
 
@@ -673,7 +885,7 @@ class SettingsDialog(QDialog):
         self.general_layout.addWidget(scroll)
 
         # Camera & Display Group
-        cam_group = QGroupBox("Camera & Display")
+        cam_group = QGroupBox("Camera && Display")
         cam_layout = QFormLayout(cam_group)
         
         self.background_mode_combo = QComboBox()
@@ -1083,7 +1295,7 @@ class SettingsDialog(QDialog):
         layout.addStretch()
 
     def setup_issues_tab(self):
-        layout = QVBoxLayout(self.issues_tab)
+        layout = self.issues_layout
         self.issues_summary_label = QLabel()
         self.issues_summary_label.setWordWrap(True)
         layout.addWidget(self.issues_summary_label)
@@ -3551,7 +3763,7 @@ class MagicMirrorApp(QMainWindow):
             "text_shadow_color": [0, 0, 0],
             "background_color": [0, 0, 0],
             "FMP_API_KEY": "YOUR_FMP_API_KEY",
-            "font_family": "Helvetica",
+            "font_family": "SF Pro Display",
             "background_opacity": 0.0,
             "web_server_enabled": False,
             "web_server_host": "127.0.0.1",
@@ -4076,27 +4288,50 @@ class MagicMirrorApp(QMainWindow):
             self.showNormal()
 
     def setup_overlay(self):
-        self.settings_button = QPushButton("⚙️", self)
-        self.settings_button.clicked.connect(self.open_settings_dialog)
-        self.settings_button.setStyleSheet(
-            "background-color: rgba(0,0,0,0.5); color: white; border: none; font-size: 24px; padding: 5px;"
-        )
-        self.settings_button.setFixedSize(40, 40)
+        overlay_button_style = """
+            QPushButton {
+                background-color: rgba(28, 28, 30, 205);
+                color: rgba(255, 255, 255, 242);
+                border: 1px solid rgba(255, 255, 255, 48);
+                border-radius: 22px;
+                font-size: 18px;
+                font-weight: 600;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: rgba(58, 58, 60, 230);
+                border-color: rgba(255, 255, 255, 82);
+            }
+            QPushButton:pressed {
+                background-color: rgba(72, 72, 74, 240);
+            }
+            QPushButton:checked {
+                background-color: rgba(10, 132, 255, 235);
+                border-color: rgba(118, 190, 255, 230);
+            }
+        """
 
-        self.edit_button = QPushButton("E", self)
+        self.settings_button = QPushButton("⚙", self)
+        self.settings_button.clicked.connect(self.open_settings_dialog)
+        self.settings_button.setToolTip("Open Settings")
+        self.settings_button.setStyleSheet(overlay_button_style)
+        self.settings_button.setFixedSize(44, 44)
+
+        self.edit_button = QPushButton("✎", self)
         self.edit_button.setCheckable(True)
         self.edit_button.clicked.connect(self.toggle_edit_mode)
-        self.edit_button.setStyleSheet(
-            "background-color: rgba(0,0,0,0.5); color: white; border: 1px solid white; font-size: 18px;"
-        )
-        self.edit_button.setFixedSize(40, 40)
+        self.edit_button.setToolTip("Edit Layout")
+        self.edit_button.setStyleSheet(overlay_button_style)
+        self.edit_button.setFixedSize(44, 44)
         self.refresh_overlay_buttons()
 
     def refresh_overlay_buttons(self):
         if not hasattr(self, "settings_button") or not hasattr(self, "edit_button"):
             return
-        self.settings_button.move(self.width() - self.settings_button.width() - 10, 10)
-        self.edit_button.move(self.width() - self.edit_button.width() - 60, 10)
+        inset = 18
+        gap = 10
+        self.settings_button.move(self.width() - self.settings_button.width() - inset, inset)
+        self.edit_button.move(self.settings_button.x() - self.edit_button.width() - gap, inset)
         self.settings_button.show()
         self.edit_button.show()
         self.settings_button.raise_()
@@ -4202,53 +4437,57 @@ class MagicMirrorApp(QMainWindow):
             self.add_widget_button_rect = None
             self.widget_manager.draw_all(painter, self)
             if self.edit_mode:
-                painter.setPen(QColor(0, 255, 0, 200))
-                painter.setBrush(QColor(0, 255, 0, 50))
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
                 for guide in self.alignment_guides:
-                    painter.setPen(QColor(255, 220, 0, 180))
+                    painter.setPen(QPen(QColor(10, 132, 255, 185), 1))
                     if guide.get("axis") == "x":
                         x = int(guide["value"])
                         painter.drawLine(x, 0, x, self.central_widget.height())
                     else:
                         y = int(guide["value"])
                         painter.drawLine(0, y, self.central_widget.width(), y)
-                painter.setPen(QColor(0, 255, 0, 200))
                 for name in self.get_sorted_widget_names():
                     bbox = self.get_widget_bbox(name)
                     if bbox:
-                        painter.drawRect(bbox)
+                        painter.setPen(QPen(QColor(10, 132, 255, 225), 1.5))
+                        painter.setBrush(QColor(10, 132, 255, 24))
+                        painter.drawRoundedRect(bbox, 10, 10)
                         layout = self.get_widget_layout(name)
                         painter.setPen(QColor(255, 255, 255))
                         painter.drawText(bbox.adjusted(4, 4, -4, -4), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"{layout.get('page', 'default')}  z{layout.get('z', 0)}")
                         if layout.get("locked"):
                             lock_rect = QRect(bbox.left(), bbox.top(), 22, 20)
-                            painter.setBrush(QColor(60, 120, 220, 220))
-                            painter.drawRect(lock_rect)
-                            painter.drawText(lock_rect, Qt.AlignmentFlag.AlignCenter, "L")
+                            painter.setPen(Qt.PenStyle.NoPen)
+                            painter.setBrush(QColor(255, 159, 10, 235))
+                            painter.drawRoundedRect(lock_rect, 6, 6)
+                            painter.setPen(QColor(255, 255, 255))
+                            painter.drawText(lock_rect, Qt.AlignmentFlag.AlignCenter, "•")
                         else:
                             btn_size = 20
                             btn_rect = QRect(bbox.right() - btn_size + 1, bbox.top(), btn_size, btn_size)
                             self.widget_delete_hitboxes[name] = btn_rect
-                            painter.setBrush(QColor(220, 40, 40, 220))
+                            painter.setPen(Qt.PenStyle.NoPen)
+                            painter.setBrush(QColor(255, 69, 58, 235))
+                            painter.drawEllipse(btn_rect)
                             painter.setPen(QColor(255, 255, 255))
-                            painter.drawRect(btn_rect)
-                            painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
+                            painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "×")
 
                         if self.is_edit_resizable_widget(name) and not layout.get("locked"):
                             handle_size = 16
                             handle_rect = QRect(bbox.right() - handle_size + 1, bbox.bottom() - handle_size + 1, handle_size, handle_size)
                             self.widget_resize_hitboxes[name] = handle_rect
-                            painter.setBrush(QColor(40, 120, 220, 220))
+                            painter.setPen(QPen(QColor(255, 255, 255, 230), 2))
+                            painter.setBrush(QColor(10, 132, 255, 240))
+                            painter.drawEllipse(handle_rect)
                             painter.setPen(QColor(255, 255, 255))
-                            painter.drawRect(handle_rect)
-                            painter.drawText(handle_rect, Qt.AlignmentFlag.AlignCenter, "↘")
 
-                plus_size = 30
-                plus_rect = QRect(self.central_widget.width() - plus_size - 15, 65, plus_size, plus_size)
+                plus_size = 34
+                plus_rect = QRect(self.central_widget.width() - plus_size - 22, 76, plus_size, plus_size)
                 self.add_widget_button_rect = plus_rect
-                painter.setBrush(QColor(40, 160, 60, 220))
-                painter.setPen(QColor(255, 255, 255))
+                painter.setPen(QPen(QColor(255, 255, 255, 48), 1))
+                painter.setBrush(QColor(10, 132, 255, 235))
                 painter.drawEllipse(plus_rect)
+                painter.setPen(QColor(255, 255, 255))
                 painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
     def is_edit_resizable_widget(self, widget_name):
@@ -4511,8 +4750,13 @@ class MagicMirrorApp(QMainWindow):
             elif "s" in anchor:
                 y -= strip_height / 2
             
-            # Draw background strip for ticker
-            painter.fillRect(0, int(y - strip_height/2), self.central_widget.width(), int(strip_height), QColor(0, 0, 0, 150))
+            # Present ticker content as a quiet, edge-inset live status pill.
+            strip_rect = QRect(22, int(y - strip_height / 2) - 3, self.central_widget.width() - 44, int(strip_height) + 6)
+            painter.save()
+            painter.setPen(QPen(QColor(255, 255, 255, 28), 1))
+            painter.setBrush(QColor(18, 18, 22, 176))
+            painter.drawRoundedRect(strip_rect, strip_rect.height() / 2, strip_rect.height() / 2)
+            painter.setClipRect(strip_rect.adjusted(12, 0, -12, 0))
 
             baseline_y = y + metrics.ascent() - metrics.height()/2
             
@@ -4538,6 +4782,7 @@ class MagicMirrorApp(QMainWindow):
                 # Reset scroll logic for infinite loop
                 if x < -text_width:
                      widget.ticker_scroll_x += (text_width + gap)
+            painter.restore()
 
         else:
             # Normal multi-line drawing logic
@@ -4548,12 +4793,11 @@ class MagicMirrorApp(QMainWindow):
 
             x, y = self._get_top_left_for_anchor(anchor, pos, max_width, total_height)
 
-            # Glassmorphism background
-            # We draw a rounded rect behind the text block
-            bg_rect = QRect(int(x) - 10, int(y) - 5, int(max_width) + 20, int(total_height) + 10)
-            painter.setBrush(QBrush(QColor(0, 0, 0, 100))) # Semi-transparent black
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(bg_rect, 10, 10)
+            # Layered glass card: enough contrast for a mirror without becoming a heavy panel.
+            bg_rect = QRect(int(x) - 14, int(y) - 10, int(max_width) + 28, int(total_height) + 20)
+            painter.setBrush(QBrush(QColor(18, 18, 22, 148)))
+            painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
+            painter.drawRoundedRect(bg_rect, 15, 15)
 
             for i, line in enumerate(lines):
                 line_y = y + i * (metrics.height() + 5)
@@ -4563,16 +4807,16 @@ class MagicMirrorApp(QMainWindow):
                 
                 # Visual Hierarchy: Make the first line bold if it's a multi-line widget
                 if i == 0 and len(lines) > 1:
-                    font.setBold(True)
+                    font.setWeight(QFont.Weight.DemiBold)
                     painter.setFont(font)
                 else:
-                    font.setBold(False)
+                    font.setWeight(QFont.Weight.Normal)
                     painter.setFont(font)
 
                 c_shadow = self.config.get("text_shadow_color", [0, 0, 0])
                 if not use_sharp_text:
-                    painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2]))
-                    painter.drawText(QPoint(int(line_x) + 2, int(baseline_y) + 2), line)
+                    painter.setPen(QColor(c_shadow[0], c_shadow[1], c_shadow[2], 105))
+                    painter.drawText(QPoint(int(line_x) + 1, int(baseline_y) + 1), line)
                 
                 c_text = self.config.get("text_color", [255, 255, 255])
                 painter.setPen(QColor(c_text[0], c_text[1], c_text[2]))
@@ -5022,6 +5266,9 @@ if __name__ == "__main__":
         threading.excepthook = thread_relaunch_on_crash
 
     app = QApplication(sys.argv)
+    app.setApplicationName("Magic Mirror")
+    app.setOrganizationName("Magic Mirror")
+    app.setStyleSheet(APPLE_UI_STYLESHEET)
     default_font = app.font()
     default_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     default_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
