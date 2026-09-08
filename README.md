@@ -2,6 +2,19 @@
 
 MagicMirror is a configurable smart mirror dashboard built with Python and PySide6. It supports live or static backgrounds, draggable overlay widgets, local desktop configuration, and a built-in web manager for remote control on your network.
 
+![MagicMirror application preview](resources/screenshot.png)
+
+## Quick Start
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python Main.py
+```
+
+The application creates `config.json` the first time it saves its settings. A webcam is not required unless camera background mode is selected.
+
 ## Current Feature Set
 
 - Background modes:
@@ -63,12 +76,15 @@ MagicMirror is a configurable smart mirror dashboard built with Python and PySid
 - Windows is the primary tested environment in this repo
 - Webcam is optional and only needed for camera background mode
 
-## Install
+## Installation
 
-Create and activate a virtual environment, then install the pinned application dependencies:
+Create and activate a virtual environment, then install the pinned dependencies:
 
-```bash
-pip install -r requirements.txt
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
 Notes:
@@ -79,17 +95,21 @@ Notes:
 
 ## Run
 
-```bash
+```powershell
 python Main.py
 ```
 
 ## Basic Usage
 
-- Move the pointer to reveal the local controls, or press `S` to open settings.
-- Enter edit mode with `E`.
-- Toggle fullscreen with `F11`.
-- Exit fullscreen with `Esc`.
-- Open the web manager at `http://localhost:815` when web management is enabled.
+| Action | Control |
+| --- | --- |
+| Reveal local controls | Move the pointer |
+| Open settings | `S` |
+| Toggle edit mode | `E` |
+| Undo or redo a layout change | `Ctrl+Z` / `Ctrl+Y` |
+| Toggle fullscreen | `F11` |
+| Exit fullscreen | `Esc` |
+| Open the web manager | `http://localhost:815` when enabled |
 
 ## Configuration
 
@@ -108,6 +128,8 @@ Most settings can be changed from either the desktop UI or the web manager, incl
 - page assignment and visibility rules
 - fonts, colors, scaling, and presets
 - performance and web management options
+
+`config.json`, saved profiles, and user-created templates may contain private URLs, API keys, tracking numbers, or access tokens. Keep these files out of public repositories and backups that are shared with others.
 
 ## Widget/API Notes
 
@@ -132,8 +154,29 @@ Credentials and private calendar URLs are redacted from browser-visible state. N
 
 Run the focused regression suite with:
 
-```bash
+```powershell
 python -m unittest discover -s tests -v
 ```
 
-Create a Windows application bundle with `build_windows.cmd`. The build script uses the project virtual environment when available and does not contain machine-specific paths.
+## Build for Windows
+
+Install PyInstaller in the active environment and run the build script:
+
+```powershell
+python -m pip install pyinstaller
+.\build_windows.cmd
+```
+
+The packaged application is written to `dist\MagicMirror`. The build script uses the project virtual environment when available and does not contain machine-specific paths.
+
+## Project Structure
+
+| Path | Purpose |
+| --- | --- |
+| `Main.py` | Desktop application, configuration UI, layouts, and media backgrounds |
+| `widget_manager.py` | Widget implementations and refresh management |
+| `web_server.py` | Local web manager and remote configuration API |
+| `stock_widget.py`, `sports_widget.py`, `history_widget.py` | Specialized widget modules |
+| `templates/` | Reusable layout and widget templates |
+| `resources/` | Application icons and screenshots |
+| `tests/` | Configuration and web security regression tests |

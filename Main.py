@@ -135,6 +135,7 @@ WIDGET_DEFAULT_SETTINGS = {
 }
 
 WIDGET_REQUIRED_SETTINGS = {
+    "sports": ["configs"],
     "ical": ["feeds"],
     "rss": ["urls"],
     "commute": ["urls"],
@@ -236,6 +237,10 @@ QDialog#settingsDialog {
 }
 QDialog#settingsDialog QLabel {
     color: #202833;
+}
+QDialog#settingsDialog QLabel#mutedLabel {
+    color: #596979;
+    font-size: 12px;
 }
 QLabel#contextHeader {
     background: #ffffff;
@@ -790,6 +795,8 @@ class OnboardingDialog(QDialog):
         self.parent.apply_template(self.template_combo.currentText())
 
 class SettingsDialog(QDialog):
+    sports_teams_loaded = Signal(str, object, bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("settingsDialog")
@@ -797,9 +804,12 @@ class SettingsDialog(QDialog):
         self.parent = parent
         self.original_config = json.loads(json.dumps(parent.config))
         self.config = parent.config
-        self.setMinimumSize(1120, 760)
-        self.resize(1240, 820)
+        available = self.screen().availableGeometry()
+        self.setMinimumSize(min(860, available.width()), min(560, available.height()))
+        self.resize(min(1240, available.width() - 40), min(820, available.height() - 60))
         self.setStyleSheet(DESKTOP_DIALOG_QSS)
+        self._sports_team_requests = set()
+        self.sports_teams_loaded.connect(self.on_sports_teams_loaded)
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(24, 24, 24, 20)
@@ -809,6 +819,7 @@ class SettingsDialog(QDialog):
         self.context_header.setWordWrap(True)
         self.layout.addWidget(self.context_header)
         self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
         self.layout.addWidget(self.tabs)
 
         self.general_tab = QWidget()
@@ -842,14 +853,23 @@ class SettingsDialog(QDialog):
         self.setup_diagnostics_tab()
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.button(QDialogButtonBox.StandardButton.Save).setText("Save changes")
         self.button_box.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton")
+        self.button_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Discard changes")
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
-        self.layout.addWidget(self.button_box)
+        footer = QHBoxLayout()
+        hint = QLabel("Changes preview live. Save to keep them.")
+        hint.setObjectName("mutedLabel")
+        hint.setWordWrap(True)
+        footer.addWidget(hint, 1)
+        footer.addWidget(self.button_box)
+        self.layout.addLayout(footer)
         self.refresh_context_header()
 
     def polish_form_layout(self, form_layout):
         form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout.setHorizontalSpacing(20)
         form_layout.setVerticalSpacing(14)
@@ -1291,7 +1311,7 @@ class SettingsDialog(QDialog):
         layout.addStretch()
 
     def setup_issues_tab(self):
-        layout = QVBoxLayout(self.issues_tab)
+        layout = self.issues_layout
         layout.setContentsMargins(10, 16, 10, 18)
         layout.setSpacing(16)
         self.issues_summary_label = QLabel()
@@ -1974,6 +1994,7 @@ class SettingsDialog(QDialog):
     def setup_widget_tab(self):
         # Use existing layout
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
         self.widget_layout.addWidget(splitter)
         self.widget_layout.setContentsMargins(10, 16, 10, 18)
         self.widget_layout.setSpacing(16)
@@ -2120,6 +2141,7 @@ class SettingsDialog(QDialog):
             label = meta.get("display_name", WIDGET_DISPLAY_NAMES.get(widget_type, widget_type.replace("_", " ").title()))
             category = meta.get("category", "Other")
             self.widget_combo.addItem(f"{label} - {category}", widget_type)
+        self.add_button.setEnabled(bool(visible_widget_types))
 
     def apply_selected_template(self):
         self.parent.apply_template(self.template_combo.currentText())
@@ -2361,35 +2383,57 @@ class SettingsDialog(QDialog):
 
     def get_sports_teams_for_league(self, league):
         league = self.normalize_sports_league(league)
-        if league in SPORTS_TEAM_CACHE:
-            return SPORTS_TEAM_CACHE[league]
+        return SPORTS_TEAM_CACHE.get(league, [(team, team) for team in SPORTS_TEAM_OPTIONS.get(league, [])])
 
-        teams = []
+    def request_sports_teams(self, league):
+        """Keep the editor usable while ESPN is slow or unavailable."""
         url = SPORTS_TEAM_API_URLS.get(league)
-        if url:
+        if not url or league in self._sports_team_requests:
+            return
+        self._sports_team_requests.add(league)
+
+        def fetch():
+            teams = []
             try:
-                payload = SESSION.get(url, timeout=8).json()
-                for sport in payload.get("sports", []):
+                response = SESSION.get(url, params={"limit": 1000}, timeout=8)
+                response.raise_for_status()
+                for sport in response.json().get("sports", []):
                     for league_data in sport.get("leagues", []):
                         for item in league_data.get("teams", []):
                             team = item.get("team", item)
-                            abbr = (team.get("abbreviation") or team.get("shortDisplayName") or "").strip().upper()
+                            abbr = (team.get("abbreviation") or "").strip().upper()
                             name = (team.get("displayName") or team.get("name") or abbr).strip()
                             if abbr:
                                 teams.append((abbr, f"{abbr} - {name}"))
                 teams = sorted(dict(teams).items())
-            except Exception as e:
-                print(f"Could not load ESPN teams for {league}: {e}")
+            except (requests.exceptions.RequestException, ValueError, TypeError, AttributeError):
+                pass
+            try:
+                self.sports_teams_loaded.emit(league, teams, bool(teams))
+            except RuntimeError:
+                pass  # The settings window was deleted while the request finished.
 
-        if not teams:
-            teams = [(team, team) for team in SPORTS_TEAM_OPTIONS.get(league, [])]
-        SPORTS_TEAM_CACHE[league] = teams
-        return teams
+        threading.Thread(target=fetch, daemon=True, name="sports-teams").start()
 
-    def update_sports_team_combo(self, league_combo, team_combo):
+    def on_sports_teams_loaded(self, league, teams, success):
+        self._sports_team_requests.discard(league)
+        if success:
+            SPORTS_TEAM_CACHE[league] = teams
+        league_combo = self.widget_settings_area.findChild(QComboBox, "sports_league_combo")
+        team_combo = self.widget_settings_area.findChild(QComboBox, "sports_team_combo")
+        if not league_combo or not team_combo or league_combo.currentData() != league:
+            return
+        self.update_sports_team_combo(league_combo, team_combo, fetch=False)
+        status = self.widget_settings_area.findChild(QLabel, "sports_team_status")
+        if status:
+            status.setText("Choose a team, or type abbreviations separated by commas." if success else
+                           "Team list unavailable. Use the saved list or type team abbreviations.")
+
+    def update_sports_team_combo(self, league_combo, team_combo, fetch=True):
         league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
         team_combo.blockSignals(True)
-        current = team_combo.currentText()
+        current = team_combo.currentText() if team_combo.property("league") == league else ""
+        team_combo.setProperty("league", league)
         team_combo.clear()
         team_combo.addItem("All Teams", "")
         for team, label in self.get_sports_teams_for_league(league):
@@ -2397,14 +2441,23 @@ class SettingsDialog(QDialog):
         if current:
             team_combo.setCurrentText(current)
         team_combo.blockSignals(False)
+        if fetch and league not in SPORTS_TEAM_CACHE:
+            self.request_sports_teams(league)
 
     def add_sport_config(self, list_widget, league_combo, team_combo):
         league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
-        team_value = team_combo.currentData() if team_combo.currentData() is not None else team_combo.currentText()
-        team = (team_value or "").split(" - ", 1)[0].strip().upper()
+        # Editable combos can retain stale item data after the user types.
+        team = team_combo.currentText().split(" - ", 1)[0].strip().upper()
+        if team in {"ALL", "ALL TEAMS"}:
+            team = ""
+        team = ", ".join(dict.fromkeys(t.strip() for t in team.split(",") if t.strip()))
         if not league:
             return
         label = team if team else "All"
+        existing = list_widget.findItems(f"{league}: {label}", Qt.MatchFlag.MatchFixedString)
+        if existing:
+            list_widget.setCurrentItem(existing[0])
+            return
         list_widget.addItem(f"{league}: {label}")
         team_combo.setCurrentIndex(0)
         self.save_current_widget_ui_to_config()
@@ -2412,6 +2465,9 @@ class SettingsDialog(QDialog):
     def reload_sports_teams(self, league_combo, team_combo):
         league = self.normalize_sports_league(league_combo.currentData() or league_combo.currentText())
         SPORTS_TEAM_CACHE.pop(league, None)
+        status = self.widget_settings_area.findChild(QLabel, "sports_team_status")
+        if status:
+            status.setText("Updating team list… You can keep editing.")
         self.update_sports_team_combo(league_combo, team_combo)
 
     def select_folder_for_entry(self, entry_widget):
@@ -2722,30 +2778,43 @@ class SettingsDialog(QDialog):
                 teams = ", ".join(config.get("teams", [])) if config.get("teams") else "All"
                 list_widget.addItem(f"{config.get('league')}: {teams}")
             list_widget.itemChanged.connect(self.save_current_widget_ui_to_config)
-            add_row("Sports Configs:", list_widget)
+            list_widget.setMinimumHeight(100)
+            list_widget.setMaximumHeight(180)
+            add_row("Leagues & teams:", list_widget)
             
             input_layout = QHBoxLayout()
             league_input = QComboBox(); league_input.setObjectName("sports_league_combo")
-            league_input.setEditable(True)
             for league, label in SPORTS_LEAGUE_OPTIONS.items():
                 league_input.addItem(label, league)
             team_input = QComboBox(); team_input.setObjectName("sports_team_combo")
             team_input.setEditable(True)
+            team_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            team_input.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            team_input.setMinimumContentsLength(12)
+            team_input.setToolTip("Select a team or type abbreviations, for example STL, CHC. Choose All Teams for the full league.")
             self.update_sports_team_combo(league_input, team_input)
             league_input.currentTextChanged.connect(lambda *_: self.update_sports_team_combo(league_input, team_input))
-            add_btn = QPushButton("Add")
+            add_btn = QPushButton("Add selection")
+            add_btn.setObjectName("primaryButton")
             add_btn.clicked.connect(lambda: self.add_sport_config(list_widget, league_input, team_input))
             reload_btn = QPushButton("Reload Teams")
             reload_btn.clicked.connect(lambda: self.reload_sports_teams(league_input, team_input))
             input_layout.addWidget(league_input)
-            input_layout.addWidget(team_input)
+            input_layout.addWidget(team_input, 1)
             input_layout.addWidget(add_btn)
-            input_layout.addWidget(reload_btn)
             self.widget_settings_layout.addLayout(input_layout)
+            team_status = QLabel("Choose a team, or type abbreviations separated by commas.")
+            team_status.setObjectName("sports_team_status")
+            team_status.setWordWrap(True)
+            self.widget_settings_layout.addWidget(team_status)
             
             rem_btn = QPushButton("Remove Selected")
             rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
-            self.widget_settings_layout.addWidget(rem_btn)
+            sports_actions = QHBoxLayout()
+            sports_actions.addWidget(rem_btn)
+            sports_actions.addWidget(reload_btn)
+            sports_actions.addStretch()
+            self.widget_settings_layout.addLayout(sports_actions)
 
             combo = QComboBox(); combo.setObjectName("tz_combo")
             combo.addItems(pytz.all_timezones)
@@ -2759,6 +2828,9 @@ class SettingsDialog(QDialog):
             combo.currentTextChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Style:", combo)
             self.add_ticker_speed_row(settings, add_row)
+            refresh_hint = QLabel("Scores refresh every minute. Dates and start times use the timezone above.")
+            refresh_hint.setWordWrap(True)
+            self.widget_settings_layout.addWidget(refresh_hint)
 
         elif widget_type == "stock":
             entry = QLineEdit(); entry.setObjectName("api_key_entry")
@@ -3558,6 +3630,7 @@ class MagicMirrorApp(QMainWindow):
         messages = {
             ("ical", "feeds"): "Add calendar feed",
             ("rss", "urls"): "Add RSS feed URL",
+            ("sports", "configs"): "Add a sports league or team",
             ("commute", "urls"): "Add calendar URL",
             ("dailyagenda", "urls"): "Add calendar URL",
             ("stock", "api_key"): "Add stock API key",
