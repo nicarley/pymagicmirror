@@ -83,7 +83,7 @@ const editor=document.createElement('div');editor.className='widget-properties';
 if(selectedWidgetName){const widgetName=selectedWidgetName,settings=config.widget_settings?.[widgetName]||{},layout=config.widget_positions?.[widgetName]||{};
 const header=document.createElement('div');header.className='widget-header';const titleWrap=document.createElement('div');const title=document.createElement('div');title.className='widget-title';title.textContent=humanizeKey(widgetName);titleWrap.appendChild(title);const subtitle=document.createElement('div');subtitle.className='muted';subtitle.textContent=`${widgetName} | ${meta.widget_statuses?.[widgetName]||'Ready'}`;titleWrap.appendChild(subtitle);header.appendChild(titleWrap);
 const headerButtons=document.createElement('div');headerButtons.className='inline-row compact';const renameInput=document.createElement('input');renameInput.type='text';renameInput.value=widgetName;renameInput.setAttribute('aria-label','Widget name');const renameBtn=document.createElement('button');renameBtn.className='secondary';renameBtn.textContent='Rename';renameBtn.onclick=()=>{if(renameInput.value&&renameInput.value!==widgetName)callAction('rename_widget',{old_name:widgetName,new_name:renameInput.value})};const removeBtn=document.createElement('button');removeBtn.className='danger';removeBtn.textContent='Remove';removeBtn.onclick=()=>callAction('remove_widget',{widget_name:widgetName});headerButtons.appendChild(renameInput);headerButtons.appendChild(renameBtn);headerButtons.appendChild(removeBtn);header.appendChild(headerButtons);editor.appendChild(header);
-const layoutTitle=document.createElement('h3');layoutTitle.textContent='Layout';editor.appendChild(layoutTitle);const lg=document.createElement('div');lg.className='grid-2';
+const layoutDetails=document.createElement('details');layoutDetails.className='layout-details';const layoutTitle=document.createElement('summary');layoutTitle.textContent='Layout and visibility';layoutDetails.appendChild(layoutTitle);const lg=document.createElement('div');lg.className='grid-2';
 addField(lg,'Anchor',()=>buildSelect(['nw','n','ne','w','center','e','sw','s','se'],layout.anchor||'nw',e=>{config.widget_positions[widgetName].anchor=e.target.value;renderPreviewWidgets()}));
 addField(lg,'Layer',()=>buildInput('number',layout.z??0,e=>{config.widget_positions[widgetName].z=parseInt(e.target.value,10)||0;renderPreviewWidgets()}));
 addField(lg,'Page',()=>buildSelect(meta.layout_pages,layout.page||'default',e=>{config.widget_positions[widgetName].page=e.target.value||'default';renderPreviewWidgets()}));
@@ -92,8 +92,8 @@ addField(lg,'Lock Widget',()=>buildInput('checkbox',layout.locked,e=>{config.wid
 addField(lg,'Conditional Visibility',()=>buildInput('checkbox',layout.visibility_rules?.enabled,e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.enabled=e.target.checked}));
 addField(lg,'Visible From',()=>buildInput('text',layout.visibility_rules?.start_time||'',e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.start_time=e.target.value}));
 addField(lg,'Visible To',()=>buildInput('text',layout.visibility_rules?.end_time||'',e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.end_time=e.target.value}));
-addField(lg,'Days',()=>buildInput('text',(layout.visibility_rules?.days||[]).join(', '),e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.days=e.target.value.split(',').map(v=>v.trim()).filter(Boolean)}));editor.appendChild(lg);
-const settingsTitle=document.createElement('h3');settingsTitle.textContent='Content';editor.appendChild(settingsTitle);const sg=document.createElement('div');sg.className='grid-2';const isSports=widgetName.split('_')[0]==='sports';if(isSports)editor.appendChild(createSportsEditor(settings,widgetName));for(const key of Object.keys(settings).sort()){if(isSports&&key==='configs')continue;addField(sg,humanizeKey(key),()=>isSports&&key==='style'?buildSelect(['Normal','Ticker'],settings[key],e=>{settings[key]=e.target.value}):createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue},{forceJson:key==='feeds',key:`${widgetName}.${key}`}))}editor.appendChild(sg)}else{const empty=document.createElement('p');empty.className='empty-state';empty.textContent='Your display has no widgets yet. Choose a widget type above to get started.';editor.appendChild(empty)}
+addField(lg,'Days',()=>buildInput('text',(layout.visibility_rules?.days||[]).join(', '),e=>{config.widget_positions[widgetName].visibility_rules=config.widget_positions[widgetName].visibility_rules||{};config.widget_positions[widgetName].visibility_rules.days=e.target.value.split(',').map(v=>v.trim()).filter(Boolean)}));layoutDetails.appendChild(lg);
+const settingsTitle=document.createElement('h3');settingsTitle.textContent='Content';editor.appendChild(settingsTitle);const sg=document.createElement('div');sg.className='grid-2';const isSports=widgetName.split('_')[0]==='sports';if(isSports)editor.appendChild(createSportsEditor(settings,widgetName));for(const key of Object.keys(settings).sort()){if(isSports&&key==='configs')continue;addField(sg,humanizeKey(key),()=>isSports&&key==='style'?buildSelect(['Normal','Ticker'],settings[key],e=>{settings[key]=e.target.value}):createGenericValueEditor(settings[key],newValue=>{config.widget_settings[widgetName][key]=newValue},{forceJson:key==='feeds',key:`${widgetName}.${key}`}))}editor.appendChild(sg);editor.appendChild(layoutDetails)}else{const empty=document.createElement('p');empty.className='empty-state';empty.textContent='Your display has no widgets yet. Choose a widget type above to get started.';editor.appendChild(empty)}
 tab.appendChild(widgets);
 """
 
@@ -101,8 +101,8 @@ DIAGNOSTICS_JS = r"""
 const tab=document.getElementById('tab-diagnostics');tab.innerHTML='';const section=createSection('Diagnostics');const pre=document.createElement('pre');pre.textContent=(meta.diagnostics_lines||[]).join('\n');section.appendChild(pre);const row=document.createElement('div');row.className='inline-row';row.style.marginTop='10px';const refreshBtn=document.createElement('button');refreshBtn.className='secondary';refreshBtn.textContent='Refresh Diagnostics';refreshBtn.onclick=()=>loadState();row.appendChild(refreshBtn);section.appendChild(row);tab.appendChild(section);
 """
 
-HTML_TEMPLATE = """
-<!doctype html><html><head><meta charset="utf-8"><title>MagicMirror Web Manager</title>
+HTML_TEMPLATE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MagicMirror Display Manager</title>
 <style>
 :root{--bg:#edf1f4;--panel:#f4f7fa;--panel2:#ffffff;--panel3:#ffffff;--line:#d5dde5;--text:#202833;--muted:#647284;--accent:#2f8f6b;--accent-hi:#3ca77e;--danger:#c94f49;--ok:#2f8f6b;--warn:#d79b45}
 *{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
@@ -120,41 +120,248 @@ header{display:flex;justify-content:space-between;align-items:center;gap:12px;pa
 .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.form-group{margin-bottom:14px}label{display:block;margin-bottom:7px;color:var(--muted);font-size:12px}
 input[type=text],input[type=password],input[type=number],select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel3);color:var(--text);font:inherit}input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent-hi);box-shadow:0 0 0 2px rgba(60,167,126,.14)}textarea{min-height:92px;resize:vertical}input[type=checkbox]{transform:scale(1.15)}button{border:1px solid rgba(32,40,51,.08);border-radius:6px;padding:10px 15px;cursor:pointer;background:var(--accent);color:#fff;font:inherit;font-weight:600}button:hover{background:var(--accent-hi)}button.secondary{background:#e2e8ee;color:#25313d}button.secondary:hover{background:#d5dee6}button.danger{background:#fff2f1;border-color:#e8b1ad;color:#a43e38}button.danger:hover{background:#f9dfdd}button.success{background:var(--ok)}
 .inline-row{display:flex;gap:10px;align-items:center}.inline-row>*{flex:1}.inline-row>button{flex:0 0 auto}.inline-row.compact input{width:150px}.widget-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.widget-title{font-weight:700}.muted{color:var(--muted);font-size:12px}.widget-editor{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;min-height:360px}.widget-list{display:flex;flex-direction:column;gap:6px;border-right:1px solid var(--line);padding-right:14px}.widget-nav-item{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:3px;padding:10px 12px}.widget-nav-item span{font-size:11px;color:var(--muted);font-weight:400}.widget-nav-item.selected{background:#dcefe7;border-color:#9fcab9;color:#173427}.widget-properties{min-width:0}#dirty-indicator{color:var(--muted);font-size:12px}#dirty-indicator.changed{color:#8a641f}pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#f7f9fb;border:1px solid var(--line);border-radius:6px;padding:14px}
-@media(max-width:1100px){#container{grid-template-columns:1fr}#preview-pane{min-height:38vh}.widget-editor{grid-template-columns:1fr}.widget-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line);padding:0 0 14px}}
+body{height:100dvh;font-size:14px}.brand strong{font-size:19px;letter-spacing:-.5px}.brand span{line-height:1.5}header{padding:18px 24px}.header-actions{flex:0 0 auto;flex-wrap:wrap}#container{grid-template-columns:minmax(300px,1fr) minmax(560px,1fr)}#preview-pane{background:radial-gradient(ellipse at center,#18211f,#080c0b)}#preview-img{width:100%;height:100%}.preview-note{position:absolute;left:20px;bottom:18px;right:20px;color:#cfddd7;font-size:12px;pointer-events:none;line-height:1.5}.preview-note span{display:inline-block;background:rgba(0,0,0,.7);border:1px solid #3c5148;border-radius:6px;padding:7px 11px}.preview-error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:30px;text-align:center;color:#d6e5dd;background:#101916}.preview-error[hidden]{display:none}.widget-box{touch-action:none}.widget-box:focus-visible{outline:3px solid #fff;outline-offset:2px}.tabs{gap:4px;padding:12px 18px}.tab-btn{flex:1}.section{box-shadow:0 2px 6px rgba(25,40,34,.025)}.section h2{letter-spacing:-.2px}.grid-2 .form-group{margin:0}.widget-editor{grid-template-columns:140px minmax(0,1fr);gap:16px}.widget-list{padding-right:12px}.widget-header{flex-wrap:wrap;align-items:flex-start}.widget-header .compact{width:100%;flex-wrap:wrap}.widget-header .compact input{min-width:110px;flex:1}.widget-nav-item{min-width:0;overflow-wrap:anywhere}.widget-nav-item strong,.widget-nav-item span{max-width:100%}.widget-title{font-size:17px}.inline-row{margin-top:10px;flex-wrap:wrap}.inline-row>input,.inline-row>select{min-width:130px;width:auto;flex:1 1 140px}.header-actions{margin:0}.form-group label{font-weight:600;color:#47586a}.form-group input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);margin:4px 2px}.form-group input[type=color]{width:100%;min-height:39px;border:1px solid var(--line);border-radius:6px;background:white;padding:4px}button:focus-visible{outline:3px solid #296eaa;outline-offset:2px}button:disabled{opacity:.55;cursor:default}button:disabled:hover{background:var(--accent)}#settings-footer{gap:18px}#settings-footer>div{display:flex;flex-direction:column;gap:4px;min-width:0}#settings-footer>button{flex-shrink:0}#dirty-indicator.changed:before{content:'●';font-size:9px;margin-right:6px}.layout-details{margin-top:22px;border-top:1px solid var(--line);padding-top:8px}.layout-details summary{padding:12px 0;font-weight:600;cursor:pointer}.layout-details[open] summary{margin-bottom:10px}.helper-text,.empty-state{font-size:12px;color:var(--muted);line-height:1.6;margin:0 0 14px}.league-row{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px;background:#f9fbfa}.league-fields{display:grid;grid-template-columns:1fr 1.4fr;gap:12px}.league-row .form-group{margin-bottom:0}.league-row .danger{font-size:12px;padding:6px 10px}.field-error{color:#a43e38;font-size:12px;line-height:1.5;margin-top:6px}.field-error:empty{display:none}[aria-invalid=true]{border-color:#c94f49!important}#container.streaming{grid-template-columns:1fr}#fullscreen-modal{position:fixed;inset:0;background:#000;z-index:9999;align-items:center;justify-content:center}#fullscreen-modal[hidden]{display:none}#fullscreen-modal:not([hidden]){display:flex}#fullscreen-close{position:absolute;right:20px;top:20px;z-index:1;background:#263b32}#fullscreen-img{width:100%;height:100%;object-fit:contain}
+@media(max-width:1300px){.widget-editor{grid-template-columns:1fr}.widget-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line);padding:0 0 14px;max-height:190px;overflow:auto}}
+@media(max-width:1000px){body{height:auto;min-height:100dvh}#container{display:flex;flex-direction:column;flex:1}#preview-pane{height:40vh;min-height:220px;border-right:0;border-bottom:1px solid var(--line)}#settings-pane{min-height:60vh;flex:1}#settings-content{overflow:visible;padding:18px}#settings-footer{position:sticky;bottom:0;z-index:4;box-shadow:0 -4px 12px rgba(32,40,51,.05)}#container.streaming #preview-pane{height:calc(100dvh - 100px);flex:1}.tabs{position:sticky;top:0;z-index:4}.widget-editor{grid-template-columns:190px minmax(0,1fr)}.widget-list{display:flex;border-right:1px solid var(--line);border-bottom:0;padding:0 14px 0 0;max-height:none;overflow:visible}}
+@media(max-width:600px){header{padding:14px 16px;align-items:flex-start;flex-direction:column}.header-actions{width:100%;gap:6px}.header-actions>button{flex:1;padding:8px 10px;font-size:12px}#settings-content{padding:12px}.section{padding:16px;margin-bottom:12px}.tabs{padding:10px 12px}.tab-btn{padding:9px 8px}.grid-2,.league-fields{grid-template-columns:1fr}.widget-editor{grid-template-columns:1fr}.widget-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line);padding:0 0 14px;max-height:180px;overflow:auto}#settings-footer{padding:12px 16px}#settings-footer>button{padding:11px 13px}#preview-pane{height:31vh;min-height:180px}.preview-note{left:12px;bottom:10px;right:12px}.preview-note span{font-size:11px}.inline-row>button{flex:1 1 auto}}
 </style></head><body>
-<header><div class="brand"><strong>Magic Mirror</strong><span>Display manager</span></div><div class="inline-row" style="flex:0 0 auto"><button id="start-stream-btn" class="secondary" onclick="startStream()">Live Preview</button><button id="stop-stream-btn" class="secondary" onclick="stopStream()" style="display:none">Stop Preview</button><button class="secondary" onclick="refreshPreview()">Refresh</button><button class="secondary" onclick="openFullscreen()">Full Screen</button></div></header>
-<div id="container"><div id="preview-pane"><img id="preview-img" src="/api/preview"><div id="overlay"></div></div><div id="settings-pane"><div class="tabs"><button class="tab-btn active" data-tab="general" onclick="switchTab('general')">Display</button><button class="tab-btn" data-tab="appearance" onclick="switchTab('appearance')">Style</button><button class="tab-btn" data-tab="widgets" onclick="switchTab('widgets')">Content</button><button class="tab-btn" data-tab="diagnostics" onclick="switchTab('diagnostics')">System</button></div><div id="settings-content"><div id="tab-general" class="tab-panel active"><span class="muted">Loading settings...</span></div><div id="tab-appearance" class="tab-panel"></div><div id="tab-widgets" class="tab-panel"></div><div id="tab-diagnostics" class="tab-panel"></div></div><div id="settings-footer"><div><span id="status" class="muted"></span><span id="dirty-indicator">All changes saved</span></div><button id="save-config-btn" onclick="saveConfig()">Save Changes</button></div></div></div>
-<div id="fullscreen-modal" onclick="closeFullscreen()" style="display:none;position:fixed;inset:0;background:black;z-index:9999;align-items:center;justify-content:center"><img id="fullscreen-img" style="max-width:100%;max-height:100%;object-fit:contain"></div>
+<header><div class="brand"><strong>Magic Mirror</strong><span>Your display, just the way you like it.</span></div><div class="inline-row header-actions"><button id="start-stream-btn" class="secondary" onclick="startStream()">Live Preview</button><button id="stop-stream-btn" class="secondary" onclick="stopStream()" style="display:none">Stop Preview</button><button class="secondary" onclick="refreshPreview()">Refresh Preview</button><button id="fullscreen-open" class="secondary" onclick="openFullscreen()">Full Screen</button></div></header>
+<div id="container">
+  <div id="preview-pane">
+    <img id="preview-img" src="/api/preview" alt="Current Magic Mirror display">
+    <div id="preview-error" class="preview-error" role="status" hidden>Preview unavailable. Check that Magic Mirror is running, then refresh the preview.</div>
+    <div id="overlay" aria-label="Widget positions"></div>
+    <div class="preview-note"><span id="preview-hint">Drag a widget to arrange your display. Save when you’re ready.</span></div>
+  </div>
+  <div id="settings-pane">
+    <div class="tabs" role="tablist" aria-label="Display settings">
+      <button id="nav-general" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-general" data-tab="general" onclick="switchTab('general')">Display</button>
+      <button id="nav-appearance" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-appearance" tabindex="-1" data-tab="appearance" onclick="switchTab('appearance')">Style</button>
+      <button id="nav-widgets" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-widgets" tabindex="-1" data-tab="widgets" onclick="switchTab('widgets')">Content</button>
+      <button id="nav-diagnostics" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-diagnostics" tabindex="-1" data-tab="diagnostics" onclick="switchTab('diagnostics')">System</button>
+    </div>
+    <div id="settings-content">
+      <div id="tab-general" class="tab-panel active" role="tabpanel" aria-labelledby="nav-general"><span class="muted">Loading settings...</span></div>
+      <div id="tab-appearance" class="tab-panel" role="tabpanel" aria-labelledby="nav-appearance"></div>
+      <div id="tab-widgets" class="tab-panel" role="tabpanel" aria-labelledby="nav-widgets"></div>
+      <div id="tab-diagnostics" class="tab-panel" role="tabpanel" aria-labelledby="nav-diagnostics"></div>
+    </div>
+    <div id="settings-footer"><div><span id="status" class="muted" role="status" aria-live="polite"></span><span id="dirty-indicator">Loading settings…</span></div><button id="save-config-btn" onclick="saveConfig()" disabled>Save Changes</button></div>
+  </div>
+</div>
+<div id="fullscreen-modal" role="dialog" aria-modal="true" aria-label="Full screen display preview" hidden><button id="fullscreen-close" onclick="closeFullscreen()">Close Preview</button><img id="fullscreen-img" alt="Full screen Magic Mirror display"></div>
 <script>
 const THEME_PRESETS=__THEME_PRESETS__,ACCESSIBILITY_PRESETS=__ACCESSIBILITY_PRESETS__;
-let state=null,config={},meta={},draggedEl=null,streamInterval=null,fullscreenInterval=null,activeTab='general',selectedWidgetName=null,dirty=false;const img=document.getElementById('preview-img'),overlay=document.getElementById('overlay');
-function setStatus(m,e=false){const s=document.getElementById('status');s.textContent=m?`${m}  `:'';s.style.color=e?'#a43e38':'#647284'}function setDirty(value=true){dirty=value;const i=document.getElementById('dirty-indicator');i.textContent=value?'Unsaved changes':'All changes saved';i.classList.toggle('changed',value)}function rgbToHex(rgb){if(!Array.isArray(rgb)||rgb.length<3)return'#000000';const c=n=>Math.max(0,Math.min(255,Number(n)||0));return'#'+[c(rgb[0]),c(rgb[1]),c(rgb[2])].map(v=>v.toString(16).padStart(2,'0')).join('')}function hexToRgb(hex){const m=/^#?([a-f0-9]{2})([a-f0-9]{2})([a-f0-9]{2})$/i.exec(hex||'');if(!m)return[0,0,0];return[parseInt(m[1],16),parseInt(m[2],16),parseInt(m[3],16)]}function humanizeKey(value){return String(value||'').replace(/_/g,' ').replace(/\\b\\w/g,c=>c.toUpperCase())}function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function fetchJson(url,options={}){const r=await fetch(url,options);if(!r.ok){throw new Error(await r.text()||(`${r.status} ${r.statusText}`))}return r.json()}
-async function loadState(){try{state=await fetchJson('/api/state');config=state.config;meta=state.meta;renderAll();setDirty(false)}catch(err){console.error(err);setStatus(`Load failed: ${err.message}`,true)}}
-async function saveConfig(){try{setStatus('Saving...');await fetchJson('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});await loadState();setStatus('Saved');refreshPreview()}catch(err){console.error(err);setStatus(`Save failed: ${err.message}`,true)}}
-async function callAction(action,payload={}){try{setStatus(`${action}...`);const r=await fetchJson('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload})});setStatus(r.message||'Done');await loadState();refreshPreview()}catch(err){console.error(err);setStatus(`${action} failed: ${err.message}`,true)}}
-function switchTab(tab){activeTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));renderActiveTab()}
-function refreshPreview(){const t=Date.now();img.src=`/api/preview?t=${t}`;if(document.getElementById('fullscreen-modal').style.display==='flex'){document.getElementById('fullscreen-img').src=`/api/preview?t=${t}`}}
-function openFullscreen(){const m=document.getElementById('fullscreen-modal');m.style.display='flex';refreshPreview();fullscreenInterval=setInterval(refreshPreview,1000)}function closeFullscreen(){document.getElementById('fullscreen-modal').style.display='none';if(fullscreenInterval)clearInterval(fullscreenInterval);fullscreenInterval=null}
-function startStream(){if(streamInterval)return;refreshPreview();streamInterval=setInterval(refreshPreview,500);document.getElementById('start-stream-btn').style.display='none';document.getElementById('stop-stream-btn').style.display='inline-block';document.getElementById('settings-pane').style.display='none';overlay.innerHTML=''}
-function stopStream(){if(streamInterval)clearInterval(streamInterval);streamInterval=null;document.getElementById('start-stream-btn').style.display='inline-block';document.getElementById('stop-stream-btn').style.display='none';document.getElementById('settings-pane').style.display='flex';resizeOverlay()}
-function resizeOverlay(){if(!img.complete||img.naturalWidth===0)return;const pane=document.getElementById('preview-pane').getBoundingClientRect(),imgRatio=img.naturalWidth/img.naturalHeight,paneRatio=pane.width/pane.height;let width,height,top,left;if(imgRatio>paneRatio){width=pane.width;height=width/imgRatio;left=0;top=(pane.height-height)/2}else{height=pane.height;width=height*imgRatio;top=0;left=(pane.width-width)/2}overlay.style.width=`${width}px`;overlay.style.height=`${height}px`;overlay.style.left=`${left}px`;overlay.style.top=`${top}px`;if(!streamInterval)renderPreviewWidgets()}
+const SPORTS_LEAGUES=[{value:'nfl',label:'NFL'},{value:'nba',label:'NBA'},{value:'mlb',label:'MLB'},{value:'nhl',label:'NHL'},{value:'ncaaf',label:'College football'},{value:'ncaamb',label:'College basketball'}];
+let state=null,config={},meta={},draggedEl=null,dragState=null,streamInterval=null,fullscreenInterval=null,activeTab='general',selectedWidgetName=null,dirty=false,busy=false,fieldId=0;
+const invalidDrafts=new Map();
+const img=document.getElementById('preview-img'),overlay=document.getElementById('overlay');
+function setStatus(message,error=false){
+  const status=document.getElementById('status');status.textContent=message||'';status.style.color=error?'#a43e38':'#647284';
+}
+function updateSaveButton(){document.getElementById('save-config-btn').disabled=busy||!state||!dirty}
+function setBusy(value){busy=value;document.getElementById('settings-content').inert=value;document.querySelector('.tabs').inert=value;updateSaveButton()}
+function setDirty(value=true){
+  if(value&&!dirty)setStatus('');
+  dirty=value;const indicator=document.getElementById('dirty-indicator');
+  indicator.textContent=value?'Unsaved changes':'All changes saved';indicator.classList.toggle('changed',value);updateSaveButton();
+}
+function rgbToHex(rgb){if(!Array.isArray(rgb)||rgb.length<3)return'#000000';return'#'+rgb.slice(0,3).map(n=>Math.round(Math.max(0,Math.min(255,Number(n)||0))).toString(16).padStart(2,'0')).join('')}
+function hexToRgb(hex){const match=/^#?([a-f0-9]{2})([a-f0-9]{2})([a-f0-9]{2})$/i.exec(hex||'');return match?match.slice(1).map(v=>parseInt(v,16)):[0,0,0]}
+function humanizeKey(value){return String(value||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+async function fetchJson(url,options={}){
+  const response=await fetch(url,{...options,signal:AbortSignal.timeout(20000)});
+  if(!response.ok){const body=await response.text();let message=body;try{message=JSON.parse(body).error||body}catch(_){}throw new Error(message||`${response.status} ${response.statusText}`)}
+  return response.json();
+}
+async function loadState({replaceConfig=false}={}){
+  try{
+    const next=await fetchJson('/api/state');state=next;meta=next.meta;
+    if(replaceConfig||!dirty){config=next.config;invalidDrafts.clear();setDirty(false)}
+    renderAll();return true;
+  }catch(error){setStatus(`Could not load settings: ${error.message}`,true);return false}
+}
+async function saveConfig(){
+  if(busy||!state)return false;
+  if(invalidDrafts.size){setStatus('Fix the highlighted fields before saving. Your edits have been kept.',true);document.querySelector('[aria-invalid="true"]')?.focus();return false}
+  if(!dirty)return true;
+  setBusy(true);setStatus('Saving changes…');
+  try{
+    await fetchJson('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+    setDirty(false);const refreshed=await loadState({replaceConfig:true});
+    setStatus(refreshed?'Changes saved.': 'Changes saved, but settings could not be refreshed. Refresh the page to reconnect.',!refreshed);
+    refreshPreview();return true;
+  }catch(error){setStatus(`Could not save: ${error.message}. Your edits have been kept.`,true);return false}
+  finally{setBusy(false)}
+}
+async function callAction(action,payload={}){
+  if(busy||!state)return false;
+  if(dirty&&!await saveConfig())return false;
+  setBusy(true);setStatus('Updating your display…');
+  try{
+    const result=await fetchJson('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,payload})});
+    const refreshed=await loadState({replaceConfig:true});
+    if(refreshed)setStatus(result.message||'Display updated.');
+    refreshPreview();return true;
+  }catch(error){setStatus(`Could not ${action.replace(/_/g,' ')}: ${error.message}`,true);return false}
+  finally{setBusy(false)}
+}
+function switchTab(tab){
+  if(busy)return;activeTab=tab;
+  document.querySelectorAll('.tab-btn').forEach(button=>{const selected=button.dataset.tab===tab;button.classList.toggle('active',selected);button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1});
+  document.querySelectorAll('.tab-panel').forEach(panel=>panel.classList.toggle('active',panel.id===`tab-${tab}`));
+  if(state)renderActiveTab();
+}
+function refreshPreview(){
+  const source=`/api/preview?t=${Date.now()}`;img.src=source;
+  if(!document.getElementById('fullscreen-modal').hidden)document.getElementById('fullscreen-img').src=source;
+}
+function openFullscreen(){
+  const modal=document.getElementById('fullscreen-modal');if(!modal.hidden)return;modal.hidden=false;
+  document.querySelector('header').inert=true;document.getElementById('container').inert=true;
+  refreshPreview();fullscreenInterval=setInterval(refreshPreview,1000);document.getElementById('fullscreen-close').focus();
+}
+function closeFullscreen(){
+  const modal=document.getElementById('fullscreen-modal');if(modal.hidden)return;modal.hidden=true;
+  document.querySelector('header').inert=false;document.getElementById('container').inert=false;
+  if(fullscreenInterval)clearInterval(fullscreenInterval);fullscreenInterval=null;document.getElementById('fullscreen-open').focus();
+}
+function startStream(){
+  if(streamInterval)return;refreshPreview();streamInterval=setInterval(refreshPreview,500);
+  document.getElementById('start-stream-btn').style.display='none';document.getElementById('stop-stream-btn').style.display='inline-block';
+  document.getElementById('settings-pane').style.display='none';document.getElementById('container').classList.add('streaming');
+  document.getElementById('preview-hint').textContent='Live preview · Updates every half second';overlay.innerHTML='';
+}
+function stopStream(){
+  if(streamInterval)clearInterval(streamInterval);streamInterval=null;
+  document.getElementById('start-stream-btn').style.display='inline-block';document.getElementById('stop-stream-btn').style.display='none';
+  document.getElementById('settings-pane').style.display='flex';document.getElementById('container').classList.remove('streaming');
+  document.getElementById('preview-hint').textContent='Drag a widget to arrange your display. Save when you’re ready.';resizeOverlay();
+}
+function resizeOverlay(){
+  if(!img.complete||img.naturalWidth===0)return;
+  const pane=document.getElementById('preview-pane').getBoundingClientRect(),ratio=img.naturalWidth/img.naturalHeight;
+  const width=Math.min(pane.width,pane.height*ratio),height=width/ratio;
+  overlay.style.width=`${width}px`;overlay.style.height=`${height}px`;overlay.style.left=`${(pane.width-width)/2}px`;overlay.style.top=`${(pane.height-height)/2}px`;
+  if(!streamInterval&&!draggedEl)renderPreviewWidgets();
+}
 function sortedWidgetNames(){return Object.keys(config.widget_positions||{}).sort((a,b)=>((config.widget_positions[a]?.z||0)-(config.widget_positions[b]?.z||0))||a.localeCompare(b))}
-function renderPreviewWidgets(){overlay.innerHTML='';if(!config.widget_positions)return;for(const name of sortedWidgetNames()){const pos=config.widget_positions[name];if((pos.page||'default')!==(config.active_page||'default'))continue;const el=document.createElement('div');el.className='widget-box';if(pos.locked)el.classList.add('locked');if(name===selectedWidgetName)el.classList.add('active');el.textContent=humanizeKey(name);el.dataset.name=name;el.style.left=`${(pos.x||0)*100}%`;el.style.top=`${(pos.y||0)*100}%`;el.style.width=`${(pos.width||0.18)*overlay.clientWidth}px`;el.style.height=`${(pos.height||0.08)*overlay.clientHeight}px`;el.style.zIndex=String(pos.z||0);if(pos.anchor==='center')el.style.transform='translate(-50%, -50%)';else if(pos.anchor==='ne')el.style.transform='translate(-100%, 0)';else if(pos.anchor==='se')el.style.transform='translate(-100%, -100%)';else if(pos.anchor==='sw')el.style.transform='translate(0, -100%)';el.onmousedown=startDrag;overlay.appendChild(el)}}
-function startDrag(e){const name=e.currentTarget.dataset.name;if((config.widget_positions?.[name]||{}).locked)return;draggedEl=e.currentTarget;draggedEl.classList.add('active');e.preventDefault()}
-document.addEventListener('mousemove',e=>{if(!draggedEl)return;const r=overlay.getBoundingClientRect();let x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;x=Math.max(0,Math.min(1,x));y=Math.max(0,Math.min(1,y));const name=draggedEl.dataset.name;config.widget_positions[name].x=x;config.widget_positions[name].y=y;config.widget_positions[name].anchor='nw';renderPreviewWidgets()});document.addEventListener('mouseup',()=>{if(!draggedEl)return;draggedEl.classList.remove('active');draggedEl=null});
-function createSection(title){const s=document.createElement('div');s.className='section';const h=document.createElement('h2');h.textContent=title;s.appendChild(h);return s}
-function addField(container,label,builder){const g=document.createElement('div');g.className='form-group';const l=document.createElement('label');l.textContent=label;g.appendChild(l);g.appendChild(builder());container.appendChild(g)}
-function buildSelect(options,value,onChange,allowBlank=false){const s=document.createElement('select');if(allowBlank){const b=document.createElement('option');b.value='';b.textContent='Select...';s.appendChild(b)}(options||[]).forEach(opt=>{const data=typeof opt==='object'?opt:{value:opt,label:opt},o=document.createElement('option');o.value=data.value;o.textContent=data.label;if(String(data.value)===String(value))o.selected=true;s.appendChild(o)});s.onchange=e=>{onChange(e);setDirty()};return s}
-function buildInput(type,value,onChange){const i=document.createElement('input');if(value==='__CONFIGURED__'){i.type='password';i.value=value;i.title='Configured. Enter a new value to replace it.'}else{i.type=type;if(type==='checkbox')i.checked=!!value;else i.value=value??''}i.onchange=e=>{onChange(e);setDirty()};return i}
-function createGenericValueEditor(value,onChange,options={}){if(Array.isArray(value)&&!options.forceJson){const i=document.createElement('textarea');i.value=value.join(', ');i.onchange=e=>{onChange(e.target.value.split(',').map(v=>v.trim()).filter(Boolean));setDirty()};return i}if(typeof value==='boolean')return buildInput('checkbox',value,e=>onChange(e.target.checked));if(typeof value==='number')return buildInput('number',value,e=>onChange(parseFloat(e.target.value)));if((typeof value==='object'&&value!==null)||options.forceJson){const i=document.createElement('textarea');i.value=JSON.stringify(value??[],null,2);i.onchange=e=>{try{onChange(JSON.parse(e.target.value));e.target.style.borderColor='';setDirty()}catch(_){e.target.style.borderColor='#d9534f'}};return i}return buildInput('text',value??'',e=>onChange(e.target.value))}
+function renderPreviewWidgets(){
+  overlay.innerHTML='';if(!config.widget_positions||streamInterval)return;
+  const transforms={nw:'',n:'translate(-50%,0)',ne:'translate(-100%,0)',w:'translate(0,-50%)',center:'translate(-50%,-50%)',e:'translate(-100%,-50%)',sw:'translate(0,-100%)',s:'translate(-50%,-100%)',se:'translate(-100%,-100%)'};
+  for(const name of sortedWidgetNames()){
+    const position=config.widget_positions[name];if((position.page||'default')!==(config.active_page||'default'))continue;
+    const element=document.createElement('div');element.className='widget-box';element.classList.toggle('locked',!!position.locked);element.classList.toggle('active',name===selectedWidgetName);
+    element.textContent=humanizeKey(name);element.dataset.name=name;element.tabIndex=0;element.setAttribute('role','button');element.setAttribute('aria-label',`${humanizeKey(name)}${position.locked?', locked':', use arrow keys to move; Enter to edit'}`);
+    element.style.left=`${(position.x||0)*100}%`;element.style.top=`${(position.y||0)*100}%`;element.style.width=`${(position.width||0.18)*overlay.clientWidth}px`;element.style.height=`${(position.height||0.08)*overlay.clientHeight}px`;element.style.zIndex=String(position.z||0);element.style.transform=transforms[position.anchor]||'';
+    element.onpointerdown=startDrag;element.onkeydown=event=>{
+      if(busy)return;
+      if(event.key==='Enter'||event.key===' '){event.preventDefault();selectedWidgetName=name;switchTab('widgets');renderPreviewWidgets();document.getElementById('nav-widgets').focus();return}
+      if(position.locked||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;
+      event.preventDefault();const step=event.shiftKey?0.05:0.01;
+      position.x=Math.max(0,Math.min(1,(position.x||0)+(event.key==='ArrowRight'?step:event.key==='ArrowLeft'?-step:0)));
+      position.y=Math.max(0,Math.min(1,(position.y||0)+(event.key==='ArrowDown'?step:event.key==='ArrowUp'?-step:0)));
+      element.style.left=`${position.x*100}%`;element.style.top=`${position.y*100}%`;setDirty();
+    };overlay.appendChild(element);
+  }
+}
+function startDrag(event){
+  if(busy||event.button!==0)return;const name=event.currentTarget.dataset.name,position=config.widget_positions[name];
+  selectedWidgetName=name;if(activeTab==='widgets')renderWidgetsTab();
+  if(position.locked)return;
+  draggedEl=event.currentTarget;draggedEl.classList.add('active');draggedEl.focus();
+  const rect=overlay.getBoundingClientRect();dragState={pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:position.x||0,y:position.y||0,width:rect.width,height:rect.height};
+  draggedEl.setPointerCapture?.(event.pointerId);event.preventDefault();
+}
+document.addEventListener('pointermove',event=>{
+  if(!draggedEl||event.pointerId!==dragState.pointerId||!dragState.width||!dragState.height)return;
+  const position=config.widget_positions[draggedEl.dataset.name];
+  let x=dragState.x+(event.clientX-dragState.startX)/dragState.width,y=dragState.y+(event.clientY-dragState.startY)/dragState.height;
+  if(config.snap_to_grid){x=Math.round(x*100)/100;y=Math.round(y*100)/100}
+  x=Math.max(0,Math.min(1,x));y=Math.max(0,Math.min(1,y));
+  if(position.x!==x||position.y!==y){position.x=x;position.y=y;draggedEl.style.left=`${x*100}%`;draggedEl.style.top=`${y*100}%`;setDirty()}
+});
+function endDrag(event){if(!draggedEl||event.pointerId!==dragState.pointerId)return;const name=draggedEl.dataset.name;draggedEl=null;dragState=null;renderPreviewWidgets();Array.from(overlay.children).find(element=>element.dataset.name===name)?.focus()}
+document.addEventListener('pointerup',endDrag);document.addEventListener('pointercancel',endDrag);
+function createSection(title){const section=document.createElement('div');section.className='section';const heading=document.createElement('h2');heading.textContent=title;section.appendChild(heading);return section}
+function addField(container,label,builder){
+  const group=document.createElement('div');group.className='form-group';const caption=document.createElement('label');caption.textContent=label;
+  const editor=builder(),control=editor.matches('input,select,textarea')?editor:editor.querySelector('input,select,textarea');
+  if(control){control.id=control.id||`field-${++fieldId}`;caption.htmlFor=control.id;control.dataset.validationKey=`${activeTab}:${activeTab==='widgets'?selectedWidgetName:''}:${label}`;if(control.type==='number'&&invalidDrafts.has(control.dataset.validationKey)){control.value=invalidDrafts.get(control.dataset.validationKey);control.setAttribute('aria-invalid','true')}}
+  group.appendChild(caption);group.appendChild(editor);container.appendChild(group);
+}
+function buildSelect(options,value,onChange,allowBlank=false,trackDirty=true){
+  const select=document.createElement('select');if(allowBlank){const blank=document.createElement('option');blank.value='';blank.textContent='Choose…';select.appendChild(blank)}
+  const normalized=(options||[]).map(option=>typeof option==='object'?option:{value:option,label:option});
+  if(value!==undefined&&value!==null&&value!==''&&!normalized.some(option=>String(option.value)===String(value)))normalized.unshift({value,label:value});
+  normalized.forEach(data=>{const option=document.createElement('option');option.value=data.value;option.textContent=data.label;if(String(data.value)===String(value))option.selected=true;select.appendChild(option)});
+  select.onchange=event=>{onChange(event);if(trackDirty)setDirty()};return select;
+}
+function buildInput(type,value,onChange,attributes={}){
+  const input=document.createElement('input');input.type=value==='__CONFIGURED__'?'password':type;
+  if(type==='checkbox')input.checked=!!value;else input.value=value??'';
+  if(value==='__CONFIGURED__'){input.title='Configured. Enter a new value to replace it.';input.autocomplete='new-password'}
+  if(type==='number')input.step='any';Object.assign(input,attributes);
+  input.oninput=event=>{const key=input.dataset.validationKey||input.id;if(type==='number'&&(input.value===''||!input.checkValidity())){invalidDrafts.set(key,input.value);input.setAttribute('aria-invalid','true');setDirty();setStatus('Enter a valid number before saving.',true);return}invalidDrafts.delete(key);input.removeAttribute('aria-invalid');onChange(event);setDirty()};return input;
+}
+function createGenericValueEditor(value,onChange,options={}){
+  const nestedArray=Array.isArray(value)&&value.some(item=>item!==null&&typeof item==='object');
+  if((typeof value==='object'&&value!==null&&!Array.isArray(value))||options.forceJson||nestedArray){
+    const wrap=document.createElement('div'),input=document.createElement('textarea'),error=document.createElement('div');
+    const key=options.key||`json-${++fieldId}`;input.value=invalidDrafts.get(key)??JSON.stringify(value??[],null,2);input.spellcheck=false;
+    error.className='field-error';error.id=`error-${++fieldId}`;input.setAttribute('aria-describedby',error.id);
+    const validate=()=>{try{const parsed=JSON.parse(input.value);onChange(parsed);invalidDrafts.delete(key);input.removeAttribute('aria-invalid');error.textContent=''}catch(_){invalidDrafts.set(key,input.value);input.setAttribute('aria-invalid','true');error.textContent='Enter valid JSON. Your edits will be kept until this is corrected.'}};
+    input.oninput=()=>{validate();setDirty()};if(invalidDrafts.has(key)){input.setAttribute('aria-invalid','true');error.textContent='Enter valid JSON. Your edits will be kept until this is corrected.'}
+    wrap.appendChild(input);wrap.appendChild(error);return wrap;
+  }
+  if(Array.isArray(value)){const input=document.createElement('textarea');input.value=value.join(', ');input.oninput=event=>{onChange(event.target.value.split(',').map(v=>v.trim()).filter(Boolean));setDirty()};return input}
+  if(typeof value==='boolean')return buildInput('checkbox',value,event=>onChange(event.target.checked));
+  if(typeof value==='number')return buildInput('number',value,event=>onChange(Number(event.target.value)));
+  return buildInput('text',value??'',event=>onChange(event.target.value));
+}
+function createSportsEditor(settings,widgetName){
+  const editor=document.createElement('div');editor.className='sports-editor';
+  const help=document.createElement('p');help.className='helper-text';help.textContent='Choose the leagues you follow. Leave teams blank for every team, or enter abbreviations separated by commas (for example, CHI, GB).';editor.appendChild(help);
+  const configs=Array.isArray(settings.configs)?settings.configs:[];
+  if(!configs.length){const empty=document.createElement('p');empty.className='empty-state';empty.textContent='No leagues selected. Add a league to show scores on your display.';editor.appendChild(empty)}
+  configs.forEach((entry,index)=>{
+    const row=document.createElement('div');row.className='league-row';
+    if(!entry||typeof entry!=='object'||Array.isArray(entry)){
+      const warning=document.createElement('p');warning.className='field-error';warning.textContent='This saved league is invalid. Remove it and add a league below.';row.appendChild(warning);
+    }else{
+      const fields=document.createElement('div');fields.className='league-fields';
+      addField(fields,'League',()=>buildSelect(SPORTS_LEAGUES,entry.league||'',event=>{entry.league=event.target.value},true));
+      addField(fields,'Teams (optional)',()=>{const teams=Array.isArray(entry.teams)?entry.teams.join(', '):String(entry.teams||'');const input=buildInput('text',teams,event=>{entry.teams=Array.from(new Set(event.target.value.split(/[\s,;]+/).map(v=>v.trim().toUpperCase()).filter(Boolean)))});input.placeholder='All teams';input.autocomplete='off';return input});row.appendChild(fields);
+    }
+    const actions=document.createElement('div');actions.className='inline-row';const remove=document.createElement('button');remove.className='danger';remove.textContent='Remove league';remove.setAttribute('aria-label',`Remove league ${index+1}`);
+    remove.onclick=()=>{settings.configs=configs.filter((_,i)=>i!==index);setDirty();renderWidgetsTab()};actions.appendChild(remove);row.appendChild(actions);editor.appendChild(row);
+  });
+  const add=document.createElement('button');add.className='secondary';add.textContent='Add league';add.onclick=()=>{const unused=SPORTS_LEAGUES.find(league=>!configs.some(entry=>entry?.league===league.value));settings.configs=[...configs,{league:unused?.value||'nfl',teams:[]}];setDirty();renderWidgetsTab()};editor.appendChild(add);return editor;
+}
 function renderGeneralTab(){/*__GENERAL__*/}
 function renderAppearanceTab(){/*__APPEARANCE__*/}
 function renderWidgetsTab(){/*__WIDGETS__*/}
 function renderDiagnosticsTab(){/*__DIAGNOSTICS__*/}
 function renderActiveTab(){if(activeTab==='general')renderGeneralTab();else if(activeTab==='appearance')renderAppearanceTab();else if(activeTab==='widgets')renderWidgetsTab();else renderDiagnosticsTab()}
 function renderAll(){renderActiveTab();renderPreviewWidgets()}
-img.onload=resizeOverlay;window.onresize=resizeOverlay;document.addEventListener('keydown',e=>{if(e.key==='Escape')closeFullscreen();if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveConfig()}});setInterval(()=>{if(!draggedEl&&!streamInterval)refreshPreview()},10000);loadState();
+img.onload=()=>{document.getElementById('preview-error').hidden=true;resizeOverlay()};
+img.onerror=()=>{document.getElementById('preview-error').hidden=false;overlay.innerHTML=''};
+window.addEventListener('resize',resizeOverlay);
+window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue=''}});
+document.querySelector('.tabs').addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||busy)return;
+  const tabs=Array.from(document.querySelectorAll('.tab-btn')),current=tabs.findIndex(tab=>tab.dataset.tab===activeTab);
+  const index=event.key==='Home'?0:event.key==='End'?tabs.length-1:(current+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+  event.preventDefault();switchTab(tabs[index].dataset.tab);tabs[index].focus();
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape')closeFullscreen();
+  if(event.key==='Tab'&&!document.getElementById('fullscreen-modal').hidden){event.preventDefault();document.getElementById('fullscreen-close').focus()}
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveConfig()}
+});
+setInterval(()=>{if(!document.hidden&&!draggedEl&&!streamInterval&&!fullscreenInterval)refreshPreview()},10000);
+loadState();
 </script></body></html>
 """
 

@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import threading
+import requests
 from datetime import datetime, date, timedelta
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QDialog, QVBoxLayout, QListWidget,
@@ -31,7 +32,7 @@ try:
     import psutil
 except ImportError:
     psutil = None
-from widget_manager import SESSION, WidgetManager, WIDGET_CLASSES
+from widget_manager import SESSION, SPORTS_REQUEST_HEADERS, WidgetManager, WIDGET_CLASSES
 import web_server
 import calendar
 
@@ -241,6 +242,9 @@ QDialog#settingsDialog QLabel {
 QDialog#settingsDialog QLabel#mutedLabel {
     color: #596979;
     font-size: 12px;
+}
+QWidget#widgetSettingsArea {
+    background: #ffffff;
 }
 QLabel#contextHeader {
     background: #ffffff;
@@ -1605,6 +1609,7 @@ class SettingsDialog(QDialog):
         if hasattr(self, "page_list"):
             self.refresh_page_manager(select_page=page)
         self.refresh_context_header()
+        self.parent.configure_ticker_timer()
         self.parent.central_widget.update()
 
     def refresh_page_manager(self, select_page=None):
@@ -2395,7 +2400,8 @@ class SettingsDialog(QDialog):
         def fetch():
             teams = []
             try:
-                response = SESSION.get(url, params={"limit": 1000}, timeout=8)
+                response = SESSION.get(url, params={"limit": 1000}, timeout=8,
+                                       headers=SPORTS_REQUEST_HEADERS)
                 response.raise_for_status()
                 for sport in response.json().get("sports", []):
                     for league_data in sport.get("leagues", []):
@@ -2505,6 +2511,7 @@ class SettingsDialog(QDialog):
         
         # Create new container to replace the old one (clean slate)
         new_container = QWidget()
+        new_container.setObjectName("widgetSettingsArea")
         new_layout = QVBoxLayout(new_container)
         new_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         new_layout.setSpacing(14)
@@ -2522,7 +2529,13 @@ class SettingsDialog(QDialog):
 
         # Helper to add rows
         def add_row(label_text, widget):
-            self.widget_settings_layout.addWidget(QLabel(label_text))
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            label.setBuddy(widget)
+            if isinstance(widget, QComboBox):
+                widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                widget.setMinimumContentsLength(10)
+            self.widget_settings_layout.addWidget(label)
             self.widget_settings_layout.addWidget(widget)
 
         # Add per-widget font size slider
@@ -2589,6 +2602,16 @@ class SettingsDialog(QDialog):
         days_entry.setText(", ".join(layout_cfg.get("visibility_rules", {}).get("days", [])))
         days_entry.textChanged.connect(self.save_current_widget_ui_to_config)
         add_row("Days:", days_entry)
+
+        # Keep the widget's content settings first, with layout tools one click away.
+        layout_controls = QWidget(new_container)
+        layout_controls.setObjectName("widgetLayoutControls")
+        layout_controls_layout = QVBoxLayout(layout_controls)
+        layout_controls_layout.setContentsMargins(0, 8, 0, 0)
+        layout_controls_layout.setSpacing(14)
+        while self.widget_settings_layout.count():
+            layout_controls_layout.addItem(self.widget_settings_layout.takeAt(0))
+        layout_controls.hide()
 
         if widget_type == "time":
             combo = QComboBox(); combo.setObjectName("time_format_combo")
@@ -2778,11 +2801,14 @@ class SettingsDialog(QDialog):
                 teams = ", ".join(config.get("teams", [])) if config.get("teams") else "All"
                 list_widget.addItem(f"{config.get('league')}: {teams}")
             list_widget.itemChanged.connect(self.save_current_widget_ui_to_config)
-            list_widget.setMinimumHeight(100)
-            list_widget.setMaximumHeight(180)
-            add_row("Leagues & teams:", list_widget)
+            list_widget.setMinimumHeight(84)
+            list_widget.setMaximumHeight(128)
+            add_row("Leagues and teams:", list_widget)
             
-            input_layout = QHBoxLayout()
+            input_layout = QFormLayout()
+            input_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+            input_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            input_layout.setVerticalSpacing(10)
             league_input = QComboBox(); league_input.setObjectName("sports_league_combo")
             for league, label in SPORTS_LEAGUE_OPTIONS.items():
                 league_input.addItem(label, league)
@@ -2799,9 +2825,8 @@ class SettingsDialog(QDialog):
             add_btn.clicked.connect(lambda: self.add_sport_config(list_widget, league_input, team_input))
             reload_btn = QPushButton("Reload Teams")
             reload_btn.clicked.connect(lambda: self.reload_sports_teams(league_input, team_input))
-            input_layout.addWidget(league_input)
-            input_layout.addWidget(team_input, 1)
-            input_layout.addWidget(add_btn)
+            input_layout.addRow("League:", league_input)
+            input_layout.addRow("Team:", team_input)
             self.widget_settings_layout.addLayout(input_layout)
             team_status = QLabel("Choose a team, or type abbreviations separated by commas.")
             team_status.setObjectName("sports_team_status")
@@ -2811,6 +2836,7 @@ class SettingsDialog(QDialog):
             rem_btn = QPushButton("Remove Selected")
             rem_btn.clicked.connect(lambda: self.remove_list_item(list_widget))
             sports_actions = QHBoxLayout()
+            sports_actions.addWidget(add_btn)
             sports_actions.addWidget(rem_btn)
             sports_actions.addWidget(reload_btn)
             sports_actions.addStretch()
@@ -2998,6 +3024,14 @@ class SettingsDialog(QDialog):
             entry.setText(str(settings.get("lon", -90.184)))
             entry.textChanged.connect(self.save_current_widget_ui_to_config)
             add_row("Longitude:", entry)
+
+        layout_toggle = QPushButton("Layout and visibility  ▸")
+        layout_toggle.setCheckable(True)
+        layout_toggle.toggled.connect(layout_controls.setVisible)
+        layout_toggle.toggled.connect(lambda opened: layout_toggle.setText(
+            "Layout and visibility  ▾" if opened else "Layout and visibility  ▸"))
+        self.widget_settings_layout.addWidget(layout_toggle)
+        self.widget_settings_layout.addWidget(layout_controls)
 
     def save_current_widget_ui_to_config(self, *args): # Modified to accept *args
         widget_name = self.widget_settings_area.property("current_widget")
@@ -3257,6 +3291,7 @@ class SettingsDialog(QDialog):
                 try: settings["lon"] = float(entry.text())
                 except ValueError: pass
         
+        self.parent.configure_ticker_timer()
         self.parent.central_widget.update()
 
     def accept(self):
@@ -3292,6 +3327,7 @@ class MagicMirrorApp(QMainWindow):
     remote_config_update_requested = Signal()
     remote_config_replace_requested = Signal(dict)
     widget_text_update_requested = Signal(str, str, bool)
+    widget_instance_text_update_requested = Signal(object, str, bool)
     ui_call_requested = Signal(object)
 
     def __init__(self):
@@ -3317,6 +3353,7 @@ class MagicMirrorApp(QMainWindow):
         self.remote_config_update_requested.connect(self.apply_remote_config, Qt.ConnectionType.QueuedConnection)
         self.remote_config_replace_requested.connect(self.replace_remote_config, Qt.ConnectionType.QueuedConnection)
         self.widget_text_update_requested.connect(self.apply_widget_text_update, Qt.ConnectionType.QueuedConnection)
+        self.widget_instance_text_update_requested.connect(self.apply_widget_instance_text_update, Qt.ConnectionType.QueuedConnection)
         self.ui_call_requested.connect(self._execute_ui_call, Qt.ConnectionType.QueuedConnection)
         self.load_config()
 
@@ -3464,7 +3501,9 @@ class MagicMirrorApp(QMainWindow):
         if not hasattr(self, "ticker_timer"):
             return
         if self.has_active_tickers():
-            self.ticker_timer.start(80 if self.config.get("low_power_mode", False) else 50)
+            interval = 80 if self.config.get("low_power_mode", False) else 33
+            if not self.ticker_timer.isActive() or self.ticker_timer.interval() != interval:
+                self.ticker_timer.start(interval)
         else:
             self.ticker_timer.stop()
 
@@ -3826,7 +3865,7 @@ class MagicMirrorApp(QMainWindow):
         self.configure_ticker_timer()
 
     def push_undo_snapshot(self):
-        snapshot = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        snapshot = self.get_layout_snapshot()
         self.undo_stack.append(snapshot)
         if len(self.undo_stack) > 100:
             self.undo_stack = self.undo_stack[-100:]
@@ -3835,9 +3874,9 @@ class MagicMirrorApp(QMainWindow):
     def undo_layout_change(self):
         if not self.undo_stack:
             return
-        current = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        current = self.get_layout_snapshot()
         self.redo_stack.append(current)
-        self.config["widget_positions"] = self.undo_stack.pop()
+        self.config.update(self.undo_stack.pop())
         self.widget_manager.load_widgets()
         self.central_widget.update()
         self.save_config()
@@ -3845,12 +3884,16 @@ class MagicMirrorApp(QMainWindow):
     def redo_layout_change(self):
         if not self.redo_stack:
             return
-        current = json.loads(json.dumps(self.config.get("widget_positions", {})))
+        current = self.get_layout_snapshot()
         self.undo_stack.append(current)
-        self.config["widget_positions"] = self.redo_stack.pop()
+        self.config.update(self.redo_stack.pop())
         self.widget_manager.load_widgets()
         self.central_widget.update()
         self.save_config()
+
+    def get_layout_snapshot(self):
+        return json.loads(json.dumps({key: self.config.get(key, {})
+                                     for key in ("widget_positions", "widget_settings")}))
 
     @staticmethod
     def get_default_config():
@@ -4220,6 +4263,9 @@ class MagicMirrorApp(QMainWindow):
         return f"{rule.get('name', 'Scene')} at {next_time.strftime('%H:%M')} {day_text} -> {rule.get('page', 'default')}"
 
     def apply_scene_schedule(self):
+        # Time/day visibility can change even when scene scheduling is disabled.
+        self.configure_ticker_timer()
+        self.central_widget.update()
         rule = self.get_matching_scene_rule()
         scene_name = rule.get("name", "") if rule else ""
         if scene_name != self.current_scene_name:
@@ -4574,6 +4620,8 @@ class MagicMirrorApp(QMainWindow):
                         painter.drawLine(0, y, self.central_widget.width(), y)
 
                 for name in self.get_sorted_widget_names():
+                    if not self.widget_is_visible(name):
+                        continue
                     bbox = self.get_widget_bbox(name)
                     if bbox:
                         painter.setPen(QPen(accent, 1))
@@ -4826,9 +4874,8 @@ class MagicMirrorApp(QMainWindow):
         
         settings = self.config.get("widget_settings", {}).get(widget_name, {})
         if settings.get("style") == "Ticker":
-             # For ticker, bbox is just a placeholder strip
-             text_width = self.central_widget.width() * 0.8
-             text_height = metrics.height() + 10
+            return self.get_ticker_rect(int(layout_cfg["y"] * self.central_widget.height()),
+                                        layout_cfg.get("anchor", "nw"), metrics.height() + 10)
         else:
             lines = text_content.split("\n")
             if not lines:
@@ -4842,6 +4889,15 @@ class MagicMirrorApp(QMainWindow):
         anchor = pos.get("anchor", "nw")
         x0, y0 = self._get_top_left_for_anchor(anchor, (anchor_x, anchor_y), text_width, text_height)
         return QRect(int(x0), int(y0), int(text_width) + 2, int(text_height) + 2)
+
+    def get_ticker_rect(self, y, anchor, strip_height):
+        height = min(int(strip_height), self.central_widget.height())
+        if "s" in anchor:
+            y -= height
+        elif anchor == "center":
+            y -= height / 2
+        top = max(0, min(int(y), self.central_widget.height() - height))
+        return QRect(0, top, self.central_widget.width(), height)
 
     def draw_text(self, painter, text, pos, font_scale, **kwargs):
         if not text:
@@ -4869,26 +4925,20 @@ class MagicMirrorApp(QMainWindow):
             # Ticker drawing logic
             text_width = metrics.horizontalAdvance(text)
             widget = self.widget_manager.widgets.get(widget_name)
+            if widget is None:
+                return
             
             # Initialize scroll if needed (first draw)
             if not getattr(widget, "ticker_initialized", False):
-                 widget.ticker_scroll_x = self.central_widget.width()
+                 widget.ticker_scroll_x = 12.0
                  widget.ticker_initialized = True
 
             x = widget.ticker_scroll_x
-            y = pos[1] # Use the Y position from the config
             anchor = kwargs.get("anchor", "nw")
-            
-            strip_height = metrics.height() + 10
-            
-            # Adjust y to be the vertical center of the strip
-            if "n" in anchor:
-                y += strip_height / 2
-            elif "s" in anchor:
-                y -= strip_height / 2
-            
-            # Draw background strip for ticker
-            strip_rect = QRect(0, int(y - strip_height / 2), self.central_widget.width(), int(strip_height))
+            strip_rect = self.get_ticker_rect(pos[1], anchor, metrics.height() + 10)
+            y = strip_rect.top() + strip_rect.height() / 2
+            painter.save()
+            painter.setClipRect(strip_rect)
             painter.fillRect(strip_rect, QColor(8, 10, 14, 185))
             painter.setPen(QColor(255, 255, 255, 28))
             painter.drawLine(strip_rect.left(), strip_rect.top(), strip_rect.right(), strip_rect.top())
@@ -4905,8 +4955,8 @@ class MagicMirrorApp(QMainWindow):
             painter.setPen(QColor(c_text[0], c_text[1], c_text[2], 245))
             painter.drawText(QPointF(float(x), float(baseline_y)), text)
             
-            # Draw the text again if it's scrolling off the screen to create a seamless loop
-            gap = 50
+            # A short ticker gets one viewport per repeat to avoid a blank strip.
+            gap = max(50, self.central_widget.width() - text_width)
             if x + text_width < self.central_widget.width():
                 x2 = x + text_width + gap
                 if not use_sharp_text:
@@ -4918,6 +4968,7 @@ class MagicMirrorApp(QMainWindow):
                 # Reset scroll logic for infinite loop
                 if x < -text_width:
                      widget.ticker_scroll_x += (text_width + gap)
+            painter.restore()
 
         else:
             # Normal multi-line drawing logic
@@ -5115,7 +5166,7 @@ class MagicMirrorApp(QMainWindow):
                 self.add_widget_from_edit_overlay()
                 return
             for name, rect in list(self.widget_resize_hitboxes.items()):
-                if rect.contains(click_point):
+                if self.widget_is_visible(name) and rect.contains(click_point):
                     self.drag_data = {
                         "widget": name,
                         "start_pos": event.position().toPoint(),
@@ -5126,7 +5177,7 @@ class MagicMirrorApp(QMainWindow):
                     self.push_undo_snapshot()
                     return
             for name, rect in list(self.widget_delete_hitboxes.items()):
-                if rect.contains(click_point):
+                if self.widget_is_visible(name) and rect.contains(click_point):
                     self.remove_widget_by_name(name, confirm=True)
                     self.widget_delete_hitboxes = {}
                     self.widget_resize_hitboxes = {}
@@ -5134,10 +5185,13 @@ class MagicMirrorApp(QMainWindow):
                     return
             with QMutexLocker(self.config_mutex):
                 for name in reversed(self.get_sorted_widget_names()):
+                    if not self.widget_is_visible(name):
+                        continue
                     bbox = self.get_widget_bbox(name)
                     if bbox and bbox.contains(click_point):
                         if self.get_widget_layout(name).get("locked"):
                             return
+                        self.push_undo_snapshot()
                         # Switch anchor to 'nw' to keep top-left corner in spot
                         pos_config = self.get_widget_layout(name)
                         if pos_config.get("anchor") != "nw":
@@ -5155,7 +5209,6 @@ class MagicMirrorApp(QMainWindow):
                             "mode": "move",
                             "start_scale": None,
                         }
-                        self.push_undo_snapshot()
                         return
 
     def add_widget_from_edit_overlay(self):
@@ -5336,6 +5389,13 @@ class MagicMirrorApp(QMainWindow):
 
     def queue_widget_text_update(self, widget_name, text, is_ticker=False):
         self.widget_text_update_requested.emit(widget_name, text, bool(is_ticker))
+
+    def queue_widget_instance_text_update(self, source, text, is_ticker=False):
+        self.widget_instance_text_update_requested.emit(source, text, bool(is_ticker))
+
+    def apply_widget_instance_text_update(self, source, text, is_ticker=False):
+        if self.widget_manager.widgets.get(source.widget_name) is source:
+            self.apply_widget_text_update(source.widget_name, text, is_ticker)
 
     def apply_widget_text_update(self, widget_name, text, is_ticker=False):
         widget = self.widget_manager.widgets.get(widget_name) if getattr(self, "widget_manager", None) else None

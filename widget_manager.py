@@ -37,6 +37,13 @@ SPORTS_API_URLS = {
     "ncaamb": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
 }
 
+# ESPN rejects the shared MagicMirror User-Agent with HTTP 403. Keep the
+# standard HTTP client identity for these public JSON endpoints.
+SPORTS_REQUEST_HEADERS = {
+    "User-Agent": requests.utils.default_user_agent(),
+    "Accept": "application/json",
+}
+
 HISTORY_API_URL = "https://history.muffinlabs.com/date"
 SUN_API_URL = "https://api.sunrise-sunset.org/json"
 RAINVIEWER_API_URL = "https://api.rainviewer.com/public/weather-maps.json"
@@ -380,7 +387,9 @@ class BaseWidget:
 
         if is_ticker:
             new_ticker_text = "   |   ".join(decorated_text.split("\n")).strip()
-            if app and hasattr(app, "queue_widget_text_update"):
+            if app and hasattr(app, "queue_widget_instance_text_update"):
+                app.queue_widget_instance_text_update(self, new_ticker_text, True)
+            elif app and hasattr(app, "queue_widget_text_update"):
                 app.queue_widget_text_update(self.widget_name, new_ticker_text, True)
             else:
                 if self.text != new_ticker_text:
@@ -389,12 +398,14 @@ class BaseWidget:
                     self.ticker_initialized = False
                 self.text = new_ticker_text
         else:
-            if app and hasattr(app, "queue_widget_text_update"):
+            if app and hasattr(app, "queue_widget_instance_text_update"):
+                app.queue_widget_instance_text_update(self, decorated_text, False)
+            elif app and hasattr(app, "queue_widget_text_update"):
                 app.queue_widget_text_update(self.widget_name, decorated_text, False)
             else:
                 self.text = decorated_text
 
-        if app and not hasattr(app, "queue_widget_text_update") and hasattr(app, 'central_widget') and app.central_widget:
+        if app and not hasattr(app, "queue_widget_text_update") and not hasattr(app, "queue_widget_instance_text_update") and hasattr(app, 'central_widget') and app.central_widget:
             app.central_widget.update()
 
     def set_error(self, err, app, prefix):
@@ -1056,155 +1067,221 @@ class RssWidget(BaseWidget):
         self.update_timer = app.after(self.get_refresh_interval(), lambda: self.update(app))
 
 class SportsWidget(BaseWidget):
+    LEAGUE_ALIASES = {
+        "college football": "ncaaf",
+        "college-football": "ncaaf",
+        "men's college basketball": "ncaamb",
+        "mens-college-basketball": "ncaamb",
+        "ncaam": "ncaamb",
+    }
+    TEAM_ALIASES = {
+        "nfl": {"jac": "jax", "was": "wsh"},
+        "nba": {"gsw": "gs", "nyk": "ny", "nop": "no", "sas": "sa", "was": "wsh"},
+        "mlb": {"chw": "cws", "kcr": "kc", "sdp": "sd", "sfg": "sf", "tbr": "tb", "wsn": "wsh", "oak": "ath"},
+        "nhl": {"lak": "la", "njd": "nj", "sjs": "sj", "tbl": "tb", "was": "wsh"},
+        "ncaamb": {"uconn": "conn", "ul": "lou"},
+    }
+
+    def __init__(self, config, widget_name):
+        super().__init__(config, widget_name)
+        self.text = "Loading sports scores..."
+        self._scoreboard_cache = {}
+
+    @classmethod
+    def normalize_league(cls, league):
+        league = str(league or "").strip().lower()
+        return cls.LEAGUE_ALIASES.get(league, league)
+
+    @classmethod
+    def normalize_team(cls, team, league):
+        # Also accept a pasted team-picker label or a full ESPN team name.
+        team = str(team or "").split(" - ", 1)[0].strip().lower()
+        team = "".join(char for char in team if char.isalnum())
+        return cls.TEAM_ALIASES.get(league, {}).get(team, team)
+
+    @classmethod
+    def grouped_configs(cls, configs):
+        leagues = {}
+        for config in configs:
+            if not isinstance(config, dict):
+                continue
+            league = cls.normalize_league(config.get("league"))
+            if not league:
+                continue
+            teams = config.get("teams") or []
+            if isinstance(teams, str):
+                teams = teams.split(",")
+            teams = list(dict.fromkeys(cls.normalize_team(team, league) for team in teams if str(team or "").strip()))
+            teams = [team for team in teams if team]
+            if league not in leagues:
+                leagues[league] = teams
+            elif not teams or not leagues[league]:
+                leagues[league] = []  # An All Teams row includes the entire league.
+            else:
+                leagues[league] = list(dict.fromkeys(leagues[league] + teams))
+        return leagues
+
     def _update_text_worker(self, app):
+        self.begin_refresh()
         try:
             widget_settings = self.config.get("widget_settings", {}).get(self.widget_name, {})
-            league_configs = widget_settings.get("configs", [])
-            display_tz_str = widget_settings.get("timezone", "UTC")
-            style = widget_settings.get("style", "Normal")
-            
+            league_configs = self.grouped_configs(widget_settings.get("configs") or [])
+            display_tz_str = widget_settings.get("timezone") or "local"
             try:
-                display_tz = pytz.timezone(display_tz_str)
+                display_tz = None if display_tz_str.lower() == "local" else pytz.timezone(display_tz_str)
             except pytz.exceptions.UnknownTimeZoneError:
-                display_tz = pytz.utc
-                self.set_error("unknown timezone", app, f"Unknown Zone:\n{display_tz_str}")
+                self.set_error(f"Unknown timezone: {display_tz_str}", app, "Choose a timezone in Sports settings.")
                 return
-
             if not league_configs:
-                self.set_text("No leagues configured for this widget.", app)
+                self.mark_updated()
+                self.set_text("Sports: add a league or team in widget settings.", app)
                 return
 
-            all_scores_text = []
-            ticker_items = []
-            had_errors = False
-
-            for config in league_configs:
-                league = config.get("league", "").lower()
-                teams = [team.lower() for team in config.get("teams", [])]
-                
+            sections = []
+            errors = []
+            for league, teams in league_configs.items():
+                header = league.upper()
                 url = SPORTS_API_URLS.get(league)
                 if not url:
-                    all_scores_text.append(f"Unknown league: {league.upper()}")
-                    had_errors = True
+                    errors.append(f"Unknown league: {header}")
                     continue
-
+                cached = False
                 try:
-                    response = SESSION.get(url)
+                    params = {"limit": 1000}
+                    if league in {"ncaaf", "ncaamb"}:
+                        params["groups"] = 80 if league == "ncaaf" else 50
+                    response = SESSION.get(url, params=params, headers=SPORTS_REQUEST_HEADERS, timeout=10)
                     response.raise_for_status()
                     data = response.json()
-                    
-                    header = league.upper()
-                    
-                    if style == "Ticker":
-                        events = data.get("events", [])
-                        if teams and teams != ['']:
-                            filtered_events = []
-                            for event in events:
-                                for competition in event.get("competitions", []):
-                                    for competitor in competition.get("competitors", []):
-                                        if competitor.get("team", {}).get("abbreviation", "").lower() in teams:
-                                            filtered_events.append(event)
-                                            break
-                                    else:
-                                        continue
-                                    break
-                            events = filtered_events
-                        
-                        for event in events:
-                            game_info = self.parse_event(event, display_tz)
-                            if game_info:
-                                ticker_items.append(f"{header}: {game_info}")
-                    else:
-                        formatted_scores = self.format_scores(data, league, teams, display_tz)
-                        if formatted_scores and "No " not in formatted_scores:
-                            all_scores_text.append(f"--- {header} ---")
-                            all_scores_text.append(formatted_scores)
+                    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+                        raise ValueError("Invalid ESPN scoreboard")
+                    self._scoreboard_cache[league] = (data, datetime.now())
+                except (requests.exceptions.RequestException, ValueError):
+                    errors.append(f"{header} feed unavailable; retrying shortly")
+                    previous = self._scoreboard_cache.get(league)
+                    if previous is None:
+                        sections.append(f"{header}: Scores unavailable.")
+                        continue
+                    data, cached_at = previous
+                    cached = True
 
-                except requests.exceptions.RequestException:
-                    had_errors = True
-                    print(f"Sports widget network error for {league}")
-                except Exception as e:
-                    had_errors = True
-                    print(f"Sports widget update error for {league}: {e}")
-
-            if style == "Ticker":
-                if not ticker_items and had_errors:
-                     self.set_error("network", app, "Sports Error")
+                formatted_scores = self.format_scores(data, league, teams, display_tz)
+                if cached:
+                    formatted_scores += f"\nCached scores from {cached_at.strftime('%b %d %I:%M %p')}."
+                if widget_settings.get("style") == "Ticker":
+                    sections.extend(f"{header}: {line}" for line in formatted_scores.splitlines())
                 else:
-                    self.mark_updated()
-                    self.set_text("\n".join(ticker_items) or "No games.", app)
-                return
+                    sections.append(f"{header}\n{formatted_scores}")
 
-            if not all_scores_text and had_errors:
-                self.set_error("network", app, "Sports Error")
-            
-            self.mark_updated()
-            self.set_text("\n".join(all_scores_text) or "No games for selected leagues/teams.", app)
+            if errors:
+                self.last_error = "; ".join(errors)
+                self.refresh_failures += 1
+            else:
+                self.mark_updated()
+            self.set_text("\n".join(sections) or "Sports scores unavailable.", app)
 
         except Exception as e:
             print(f"Sports widget update error: {e}")
-            self.set_error("error", app, "Sports Error")
+            self.set_error("Unable to update scores; check Sports settings.", app, "Sports scores unavailable.")
+
+    @classmethod
+    def event_teams(cls, event, league):
+        names = set()
+        if not isinstance(event, dict):
+            return names
+        for competition in event.get("competitions") or []:
+            if not isinstance(competition, dict):
+                continue
+            for competitor in competition.get("competitors") or []:
+                if not isinstance(competitor, dict):
+                    continue
+                team = competitor.get("team") or {}
+                for key in ("abbreviation", "displayName", "shortDisplayName", "name", "location", "slug", "id"):
+                    if team.get(key):
+                        names.add(cls.normalize_team(team[key], league))
+        return names
 
     def format_scores(self, data, league, teams, display_tz):
         output = []
-        events = data.get("events", [])
-        
-        if teams and teams != ['']:
-            filtered_events = []
-            for event in events:
-                for competition in event.get("competitions", []):
-                    for competitor in competition.get("competitors", []):
-                        if competitor.get("team", {}).get("abbreviation", "").lower() in teams:
-                            filtered_events.append(event)
-                            break
-                    else:
-                        continue
-                    break
-            events = filtered_events
-
-        if not events:
-            return f"No {league.upper()} games today."
-
-        for event in events:
+        teams = {self.normalize_team(team, league) for team in teams if str(team or "").strip()}
+        matched = set()
+        seen = set()
+        for event in data.get("events", []):
+            event_teams = self.event_teams(event, league)
+            if teams and not teams.intersection(event_teams):
+                continue
             game_info = self.parse_event(event, display_tz)
-            if game_info:
+            event_id = str(event.get("id") or game_info) if isinstance(event, dict) else None
+            if game_info and event_id not in seen:
                 output.append(game_info)
-        
-        return "\n".join(output) if output else f"No {league.upper()} games for selected teams."
+                seen.add(event_id)
+                matched.update(teams.intersection(event_teams))
+        missing = teams - matched
+        if missing:
+            output.append(f"No games for {', '.join(sorted(team.upper() for team in missing))} on this slate.")
+        elif not output:
+            output.append("No games scheduled on this slate.")
+        return "\n".join(output)
 
     @staticmethod
     def parse_event(event, display_tz):
-        competitions = event.get("competitions", [])
+        if not isinstance(event, dict):
+            return None
+        competitions = event.get("competitions") or []
         if not competitions:
             return None
-            
         competition = competitions[0]
-        status = competition.get("status", {}).get("type", {}).get("name", "STATUS_UNKNOWN")
-        
-        competitors = competition.get("competitors", [])
-        if len(competitors) != 2:
+        if not isinstance(competition, dict):
             return None
+        status = (competition.get("status") or event.get("status") or {}).get("type") or {}
+        status_name = status.get("name", "")
+        state = status.get("state", "")
+        detail = status.get("shortDetail") or status.get("detail") or status.get("description")
+        competitors = competition.get("competitors") or []
+        if len(competitors) != 2 or not all(isinstance(team, dict) for team in competitors):
+            return None
+        # ESPN usually sends home first; use the conventional away-at-home order.
+        competitors = sorted(competitors, key=lambda team: team.get("homeAway") == "home")
+        names = [str((team.get("team") or {}).get("abbreviation") or (team.get("team") or {}).get("shortDisplayName") or "TBD") for team in competitors]
+        scores = []
+        for team in competitors:
+            score = team.get("score", "0")
+            if isinstance(score, dict):
+                score = score.get("displayValue", score.get("value", "0"))
+            scores.append(str(score))
+        game_time = None
+        scheduled_date = None
+        try:
+            timestamp = competition.get("date") or event.get("date")
+            game_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            scheduled_date = game_time.strftime("%b %d")
+            if game_time.tzinfo is None:
+                game_time = pytz.utc.localize(game_time)
+            game_time = game_time.astimezone(display_tz)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        date_label = game_time.strftime("%b %d") if game_time else ""
+        matchup = f"{names[0]} at {names[1]}"
 
-        team1 = competitors[0].get("team", {})
-        team2 = competitors[1].get("team", {})
-        
-        score1 = competitors[0].get("score", "0")
-        score2 = competitors[1].get("score", "0")
+        if status.get("completed") or state == "in" or status_name in {"STATUS_FINAL", "STATUS_IN_PROGRESS"}:
+            detail = detail or ("Final" if status.get("completed") or status_name == "STATUS_FINAL" else "Live")
+            result = f"{names[0]} {scores[0]} - {names[1]} {scores[1]} ({detail})"
+        elif status_name == "STATUS_SCHEDULED" or (state == "pre" and not status_name):
+            time_tbd = competition.get("timeValid") is False or "TBD" in str(detail or "").upper()
+            if time_tbd and scheduled_date:
+                # A placeholder midnight is a date, not a confirmed kickoff that
+                # should shift onto the previous day in the display timezone.
+                date_label = scheduled_date
+            time_label = game_time.strftime("%I:%M %p %Z").lstrip("0") if game_time and not time_tbd else "Time TBD"
+            result = f"{matchup} · {time_label}"
+        else:
+            detail = detail or status_name.removeprefix("STATUS_").replace("_", " ").title() or "Status unavailable"
+            result = f"{matchup} ({detail})"
+        return f"{result} · {date_label}" if date_label else result
 
-        team1_name = team1.get("abbreviation", "TBD")
-        team2_name = team2.get("abbreviation", "TBD")
-
-        if status == "STATUS_FINAL":
-            return f"{team1_name} {score1} - {team2_name} {score2} (Final)"
-        elif status == "STATUS_IN_PROGRESS":
-            detail = competition.get("status", {}).get("type", {}).get("detail", "In Progress")
-            return f"{team1_name} {score1} - {team2_name} {score2} ({detail})"
-        elif status == "STATUS_SCHEDULED":
-            game_time_utc = datetime.fromisoformat(competition.get("date").replace("Z", "+00:00"))
-            game_time_local = game_time_utc.astimezone(display_tz).strftime("%I:%M %p %Z")
-            return f"{team1_name} vs {team2_name} at {game_time_local}"
-        
-        return None
+    def get_refresh_interval(self):
+        # Live scores should not inherit the hour-long RSS/feed refresh default.
+        return 60000
 
     def update(self, app):
         self.run_worker_update(app)
@@ -1736,6 +1813,8 @@ class WidgetManager:
     def restart_updates(self):
         self.stop_updates()
         self.start_updates(self.app)
+        if hasattr(self.app, "configure_ticker_timer"):
+            self.app.configure_ticker_timer()
 
     def shutdown(self):
         self.stop_updates()
