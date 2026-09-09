@@ -1,19 +1,6 @@
 @echo off
 setlocal
-cd /d "%~dp0.."
-
-set "PYTHON=python"
-if exist ".venv\Scripts\python.exe" set "PYTHON=.venv\Scripts\python.exe"
-
-%PYTHON% -m PyInstaller ^
-  --noconfirm ^
-  --clean ^
-  --onedir ^
-  --windowed ^
-  --icon "resources\icon.ico" ^
-  --hidden-import "widget_manager" ^
-  --name "MagicMirror" ^
-  --add-data "resources;resources" ^
-  "Main.py"
-
-endlocal
+call "%~dp0..\build_windows.cmd" --run
+set "MM_BUILD_EXIT=%ERRORLEVEL%"
+if /i not "%~1"=="--no-pause" pause
+exit /b %MM_BUILD_EXIT%

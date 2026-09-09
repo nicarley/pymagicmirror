@@ -14,9 +14,9 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QDialogButtonBox, QWidget, QHBoxLayout,
     QMessageBox, QSizePolicy, QTabWidget, QComboBox, QSlider, QColorDialog,
     QListWidgetItem, QScrollArea, QSplitter, QFrame, QGroupBox, QFormLayout,
-    QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QPlainTextEdit
+    QInputDialog, QFileDialog, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QBoxLayout
 )
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush, QPen
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QFont, QFontMetrics, QIcon, QFontDatabase, QBrush, QPen, QPalette
 from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QBuffer, QIODevice, QMutex, QMutexLocker, Signal, QUrl, QThread
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 import cv2
@@ -231,184 +231,244 @@ DEFAULT_SCENE_SCHEDULE = [
 ]
 MAX_CONFIG_BACKUPS = 10
 
+DESKTOP_COLORS = {
+    "light": {
+        "canvas": "#f5f5f7", "surface": "#ffffff", "inset": "#f5f5f7",
+        "text": "#1d1d1f", "secondary": "#62626b", "border": "#d5d5dc",
+        "control_border": "#898992", "hover": "#ededf2", "pressed": "#dedee6",
+        "accent": "#0066cc", "accent_hover": "#0055b3", "focus": "#0071e3",
+        "selection": "#e6f0ff", "selection_text": "#004b9b",
+        "danger": "#b4232f", "danger_surface": "#fff1f2", "danger_hover": "#ffe2e5",
+        "disabled": "#86868b",
+    },
+    "dark": {
+        "canvas": "#161618", "surface": "#222225", "inset": "#1b1b1e",
+        "text": "#f5f5f7", "secondary": "#b5b5bf", "border": "#414147",
+        "control_border": "#7e7e89", "hover": "#323237", "pressed": "#414148",
+        "accent": "#0066cc", "accent_hover": "#0055b3", "focus": "#70b5ff",
+        "selection": "#263e59", "selection_text": "#d9ebff",
+        "danger": "#ffb3b9", "danger_surface": "#40272d", "danger_hover": "#563039",
+        "disabled": "#86868f",
+    },
+}
+
+# Grouped surfaces and semantic colors keep the settings readable in both
+# system appearances. The mirror's own configurable palette is independent.
 DESKTOP_DIALOG_QSS = """
-QDialog#settingsDialog {
-    background: #edf1f4;
-    color: #202833;
-}
-QDialog#settingsDialog QLabel {
-    color: #202833;
-}
-QDialog#settingsDialog QLabel#mutedLabel {
-    color: #596979;
-    font-size: 12px;
-}
-QWidget#widgetSettingsArea {
-    background: #ffffff;
-}
-QLabel#contextHeader {
-    background: #ffffff;
-    border: 1px solid #d5dde5;
-    border-radius: 10px;
-    color: #344150;
-    padding: 14px 16px;
-}
+QDialog { background: @canvas; color: @text; }
+QLabel, QCheckBox { color: @text; background: transparent; }
+QLabel#mutedLabel, QLabel#contextHeader { color: @secondary; }
+QLabel#dialogTitle { font-size: 24pt; font-weight: 600; }
+QLabel#sectionTitle { font-size: 13pt; font-weight: 600; }
+QLabel#contextHeader { padding: 0 0 4px; }
+QWidget#widgetSettingsArea { background: @surface; }
+QWidget#settingsPage { background: @canvas; }
 QTabWidget::pane {
-    background: #ffffff;
-    border: 1px solid #d8e0e8;
-    border-radius: 10px;
-    top: -1px;
+    background: @canvas;
+    border: none;
+    border-top: 1px solid @border;
+    top: 8px;
 }
 QTabBar::tab {
-    background: #e2e8ef;
-    border: 1px solid #d3dbe4;
-    border-bottom: none;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
-    color: #506070;
-    margin-right: 6px;
-    padding: 11px 18px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    color: @secondary;
+    margin-right: 4px;
+    padding: 10px 16px;
+    font-weight: 600;
 }
 QTabBar::tab:selected {
-    background: #ffffff;
-    border-color: #cfd8e2;
-    color: #1f2933;
+    background: @selection;
+    border-color: @border;
+    color: @selection_text;
 }
-QTabBar::tab:hover {
-    background: #f5f7fa;
-    color: #1f2933;
-}
+QTabBar::tab:!selected:hover { background: @hover; color: @text; }
+QTabBar::tab:selected:focus { border-color: @focus; }
 QGroupBox {
-    background: #ffffff;
-    border: 1px solid #d8e0e8;
-    border-radius: 8px;
-    color: #202833;
+    background: @surface;
+    border: 1px solid @border;
+    border-radius: 14px;
+    color: @text;
     font-weight: 600;
-    margin-top: 20px;
-    padding: 24px 16px 16px;
+    margin-top: 28px;
+    padding: 20px;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 14px;
-    padding: 0 8px;
+    left: 6px;
+    padding: 0 2px;
 }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QListWidget {
-    background: #ffffff;
-    border: 1px solid #ccd6df;
+    background: @inset;
+    border: 1px solid @control_border;
     border-radius: 8px;
-    color: #1f2933;
-    padding: 8px 10px;
-    selection-background-color: #2f8f6b;
+    color: @text;
+    padding: 8px 12px;
+    selection-background-color: @accent;
     selection-color: #ffffff;
 }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 22px; }
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    color: @disabled; border-color: @border;
+}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QListWidget:focus {
-    border-color: #2f8f6b;
+    border: 2px solid @focus;
+    padding: 7px 11px;
 }
+QComboBox { padding-right: 28px; }
+QComboBox:focus { padding-right: 27px; }
+QComboBox::drop-down { border: none; width: 26px; }
+QComboBox::down-arrow { image: url(@icons/chevron-down.svg); width: 12px; height: 12px; }
+QSpinBox, QDoubleSpinBox { padding-right: 24px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border; subcontrol-position: top right; width: 22px;
+    border: none; background: transparent;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border; subcontrol-position: bottom right; width: 22px;
+    border: none; background: transparent;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(@icons/chevron-up.svg); width: 10px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(@icons/chevron-down.svg); width: 10px; height: 10px; }
+QComboBox QAbstractItemView {
+    background: @surface; color: @text; border: 1px solid @border;
+    selection-background-color: @selection; selection-color: @selection_text;
+    padding: 6px; outline: none;
+}
+QListWidget { background: @surface; border-color: @border; padding: 6px; }
+QListWidget:focus { padding: 5px; }
 QListWidget::item {
-    border-radius: 7px;
-    color: #202833;
-    padding: 10px 10px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    color: @text;
+    padding: 12px;
+    margin: 2px 0;
 }
-QListWidget::item:selected {
-    background: #dcefe7;
-    color: #173427;
-}
-QScrollArea {
-    background: transparent;
-}
-QSplitter::handle {
-    background: #d8e0e8;
-}
+QListWidget::item:hover { background: @hover; }
+QListWidget::item:selected { background: @selection; color: @selection_text; border-color: @focus; }
+QScrollArea { background: transparent; border: none; }
+QSplitter::handle { background: @border; }
+QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
+QScrollBar::handle:vertical { background: @control_border; border-radius: 4px; min-height: 32px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QPushButton {
-    background: #e4eaf0;
-    border: 1px solid #ccd6df;
-    border-radius: 8px;
-    color: #263340;
+    background: @surface;
+    border: 1px solid @control_border;
+    border-radius: 9px;
+    color: @text;
     font-weight: 600;
-    padding: 9px 14px;
+    min-height: 22px;
+    padding: 8px 16px;
 }
-QPushButton:hover {
-    background: #d8e1e9;
-    border-color: #b9c7d3;
-}
-QPushButton:pressed {
-    background: #cbd6df;
-}
+QPushButton:hover { background: @hover; }
+QPushButton:pressed { background: @pressed; }
+QPushButton:focus { border: 2px solid @focus; padding: 7px 15px; }
+QPushButton:checked { background: @selection; color: @selection_text; }
 QPushButton#primaryButton {
-    background: #2f8f6b;
-    border-color: #3ca77e;
+    background: @accent;
+    border-color: @accent;
     color: #ffffff;
 }
-QPushButton#primaryButton:hover {
-    background: #39a67c;
-}
+QPushButton#primaryButton:hover { background: @accent_hover; border-color: @accent_hover; }
+QPushButton#primaryButton:focus { border-color: @text; }
 QPushButton#dangerButton {
-    background: #fff3f2;
-    border-color: #e4aaa6;
-    color: #a63f39;
+    background: @danger_surface;
+    border-color: @danger;
+    color: @danger;
 }
-QPushButton#dangerButton:hover {
-    background: #fbe3e1;
+QPushButton#dangerButton:hover { background: @danger_hover; }
+QPushButton#dangerButton:focus { border-color: @focus; }
+QPushButton:disabled, QPushButton#primaryButton:disabled, QPushButton#dangerButton:disabled {
+    background: @inset;
+    border-color: @border;
+    color: @disabled;
 }
-QPushButton:disabled {
-    background: #dde3ea;
-    border-color: #cbd5df;
-    color: #8a96a3;
+QDialogButtonBox QPushButton { min-width: 112px; }
+QCheckBox { spacing: 10px; min-height: 28px; }
+QCheckBox::indicator {
+    width: 20px; height: 20px; border: 1px solid @control_border;
+    border-radius: 5px; background: @surface;
 }
-QDialogButtonBox QPushButton {
-    min-width: 104px;
-}
-QCheckBox {
-    color: #202833;
-    spacing: 10px;
-}
+QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(@icons/check.svg); }
+QCheckBox::indicator:disabled { background: @inset; border-color: @border; }
+QCheckBox:focus { background: @selection; border-radius: 5px; }
+QSlider { min-height: 28px; }
 QSlider::groove:horizontal {
-    background: #d4dde6;
-    border-radius: 4px;
+    background: @border;
+    border-radius: 3px;
     height: 6px;
 }
+QSlider::sub-page:horizontal { background: @accent; border-radius: 3px; }
 QSlider::handle:horizontal {
-    background: #47a47d;
-    border: 1px solid #70c39d;
-    border-radius: 8px;
-    margin: -6px 0;
-    width: 16px;
+    background: @surface;
+    border: 1px solid @control_border;
+    border-radius: 11px;
+    margin: -8px 0;
+    width: 22px;
 }
+QSlider::handle:horizontal:focus { background: @selection; border: 2px solid @focus; }
+QToolTip { background: @surface; color: @text; border: 1px solid @border; padding: 6px; }
 """
 
 OVERLAY_BUTTON_QSS = """
 QPushButton {
-    background: rgba(16, 18, 22, 178);
-    border: 1px solid rgba(255, 255, 255, 62);
-    border-radius: 8px;
+    background: rgba(28, 28, 32, 235);
+    border: 1px solid rgba(255, 255, 255, 115);
+    border-radius: 20px;
     color: white;
-    font-size: 13px;
+    font-size: 11pt;
     font-weight: 600;
-    padding: 0 12px;
+    padding: 0 18px;
 }
 QPushButton:hover {
-    background: rgba(34, 40, 48, 220);
-    border-color: rgba(255, 255, 255, 110);
+    background: rgba(52, 52, 58, 245);
+    border-color: rgba(255, 255, 255, 180);
 }
 QPushButton:pressed {
-    background: rgba(47, 143, 107, 220);
+    background: #0055b3;
 }
+QPushButton:focus { border: 2px solid #70b5ff; }
 """
 
-OVERLAY_BUTTON_ACTIVE_QSS = """
-QPushButton {
-    background: rgba(47, 143, 107, 220);
-    border: 1px solid rgba(120, 214, 170, 180);
-    border-radius: 8px;
-    color: white;
-    font-size: 13px;
-    font-weight: 700;
-    padding: 0 12px;
-}
-QPushButton:hover {
-    background: rgba(57, 166, 124, 235);
-}
+OVERLAY_BUTTON_ACTIVE_QSS = OVERLAY_BUTTON_QSS + """
+QPushButton { background: #0066cc; border-color: #70b5ff; }
+QPushButton:hover { background: #0055b3; }
 """
+
+
+class DesignDialog(QDialog):
+    """Shared native typography and system appearance for desktop settings."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+        font.setPointSizeF(max(11.0, QApplication.font().pointSizeF(), font.pointSizeF()))
+        self.setFont(font)
+        self.refresh_appearance()
+        QApplication.styleHints().colorSchemeChanged.connect(self.refresh_appearance)
+
+    def refresh_appearance(self, *_):
+        dark = QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        colors = DESKTOP_COLORS["dark" if dark else "light"]
+        palette = QPalette(self.palette())
+        for role, token in {
+            QPalette.ColorRole.Window: "canvas", QPalette.ColorRole.WindowText: "text",
+            QPalette.ColorRole.Base: "surface", QPalette.ColorRole.AlternateBase: "inset",
+            QPalette.ColorRole.Text: "text", QPalette.ColorRole.Button: "surface",
+            QPalette.ColorRole.ButtonText: "text", QPalette.ColorRole.PlaceholderText: "secondary",
+            QPalette.ColorRole.Highlight: "accent",
+        }.items():
+            palette.setColor(role, QColor(colors[token]))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        self.setPalette(palette)
+        stylesheet = DESKTOP_DIALOG_QSS
+        for token in sorted(colors, key=len, reverse=True):
+            stylesheet = stylesheet.replace("@" + token, colors[token])
+        icons = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "ui").replace("\\", "/")
+        stylesheet = stylesheet.replace("@icons", icons)
+        self.setStyleSheet(stylesheet)
 
 
 def default_visibility_rules():
@@ -722,16 +782,32 @@ class HybridRenderSurface(QWidget):
         self.background_widget.update()
         super().update()
 
-class OnboardingDialog(QDialog):
+class OnboardingDialog(DesignDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
         self.setWindowTitle("Welcome to Magic Mirror")
-        self.setMinimumWidth(520)
+        available = self.screen().availableGeometry()
+        self.setMinimumWidth(min(560, available.width() - 40))
+        self.resize(min(640, available.width() - 40), min(760, available.height() - 60))
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Quick setup"))
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(20)
+        title = QLabel("Welcome to MagicMirror")
+        title.setObjectName("dialogTitle")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        subtitle = QLabel("Choose a starting point. You can fine-tune everything in Settings.")
+        subtitle.setObjectName("mutedLabel")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
 
-        form = QFormLayout()
+        group = QGroupBox("Your mirror")
+        form = QFormLayout(group)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(20)
+        form.setVerticalSpacing(14)
 
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(list(THEME_PRESETS.keys()))
@@ -743,20 +819,20 @@ class OnboardingDialog(QDialog):
 
         self.background_combo = QComboBox()
         self.background_combo.addItems(["None", "Camera", "Image", "Video", "YouTube"])
-        form.addRow("Background Mode:", self.background_combo)
+        form.addRow("Background mode:", self.background_combo)
 
         self.feed_combo = QComboBox()
         self.feed_combo.addItems(["15 Minutes", "30 Minutes", "1 Hour", "2 Hours"])
         self.feed_combo.setCurrentText("1 Hour")
-        form.addRow("Feed Refresh:", self.feed_combo)
+        form.addRow("Feed refresh:", self.feed_combo)
 
         self.mirror_type_combo = QComboBox()
         self.mirror_type_combo.addItems(["Bathroom", "Hallway", "Bedroom", "Office"])
-        form.addRow("Mirror Type:", self.mirror_type_combo)
+        form.addRow("Mirror type:", self.mirror_type_combo)
 
         self.distance_combo = QComboBox()
         self.distance_combo.addItems(["Close", "Medium", "Far"])
-        form.addRow("Viewing Distance:", self.distance_combo)
+        form.addRow("Viewing distance:", self.distance_combo)
 
         self.room_combo = QComboBox()
         self.room_combo.addItems(["Bedroom", "Kitchen", "Living Room", "Office", "Entryway"])
@@ -767,11 +843,17 @@ class OnboardingDialog(QDialog):
             self.template_combo.addItems(self.parent.get_available_template_names())
         else:
             self.template_combo.addItems(["Today", "Minimal Clock", "Daily Dashboard", "News Wall"])
-        form.addRow("Starter Template:", self.template_combo)
+        form.addRow("Starter template:", self.template_combo)
 
-        layout.addLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(group)
+        layout.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Set up mirror")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primaryButton")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -798,32 +880,38 @@ class OnboardingDialog(QDialog):
         cfg["active_page"] = "photo-frame" if self.room_combo.currentText() == "Living Room" else "default"
         self.parent.apply_template(self.template_combo.currentText())
 
-class SettingsDialog(QDialog):
+class SettingsDialog(DesignDialog):
     sports_teams_loaded = Signal(str, object, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("settingsDialog")
-        self.setWindowTitle("Settings and Widgets")
+        self.setWindowTitle("MagicMirror Settings")
         self.parent = parent
         self.original_config = json.loads(json.dumps(parent.config))
         self.config = parent.config
         available = self.screen().availableGeometry()
         self.setMinimumSize(min(860, available.width()), min(560, available.height()))
         self.resize(min(1240, available.width() - 40), min(820, available.height() - 60))
-        self.setStyleSheet(DESKTOP_DIALOG_QSS)
         self._sports_team_requests = set()
         self.sports_teams_loaded.connect(self.on_sports_teams_loaded)
 
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(24, 24, 24, 20)
-        self.layout.setSpacing(18)
+        self.layout.setContentsMargins(28, 24, 28, 20)
+        self.layout.setSpacing(16)
+        title = QLabel("MagicMirror")
+        title.setObjectName("dialogTitle")
+        self.layout.addWidget(title)
         self.context_header = QLabel()
         self.context_header.setObjectName("contextHeader")
         self.context_header.setWordWrap(True)
+        self.context_header.setTextFormat(Qt.TextFormat.PlainText)
         self.layout.addWidget(self.context_header)
         self.tabs = QTabWidget()
         self.tabs.setUsesScrollButtons(True)
+        self.tabs.setAccessibleName("Settings categories")
+        self.tabs.currentChanged.connect(lambda index: self.setWindowTitle(
+            f"{self.tabs.tabText(index)} — MagicMirror Settings"))
         self.layout.addWidget(self.tabs)
 
         self.general_tab = QWidget()
@@ -860,6 +948,8 @@ class SettingsDialog(QDialog):
         self.button_box.button(QDialogButtonBox.StandardButton.Save).setText("Save changes")
         self.button_box.button(QDialogButtonBox.StandardButton.Save).setObjectName("primaryButton")
         self.button_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Discard changes")
+        self.button_box.button(QDialogButtonBox.StandardButton.Save).setAutoDefault(False)
+        self.button_box.button(QDialogButtonBox.StandardButton.Cancel).setAutoDefault(False)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         footer = QHBoxLayout()
@@ -869,21 +959,32 @@ class SettingsDialog(QDialog):
         footer.addWidget(hint, 1)
         footer.addWidget(self.button_box)
         self.layout.addLayout(footer)
+        # Enter in a settings field should not unexpectedly save and close it.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
         self.refresh_context_header()
 
     def polish_form_layout(self, form_layout):
-        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout.setHorizontalSpacing(20)
         form_layout.setVerticalSpacing(14)
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "general_columns"):
+            compact = self.width() < max(1040, self.fontMetrics().height() * 54)
+            self.general_columns.setDirection(
+                QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight)
+
     def setup_general_tab(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
+        content.setObjectName("settingsPage")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 16, 10, 18)
         layout.setSpacing(16)
@@ -891,7 +992,7 @@ class SettingsDialog(QDialog):
         self.general_layout.addWidget(scroll)
 
         # Camera & Display Group
-        cam_group = QGroupBox("Camera & Display")
+        cam_group = QGroupBox("Camera and display")
         cam_layout = QFormLayout(cam_group)
         self.polish_form_layout(cam_layout)
         
@@ -1039,7 +1140,8 @@ class SettingsDialog(QDialog):
         self.snap_check.stateChanged.connect(self.live_update_snap_to_grid)
         sys_layout.addRow("", self.snap_check)
 
-        primary_row = QHBoxLayout()
+        primary_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.general_columns = primary_row
         primary_row.setSpacing(16)
         primary_row.addWidget(cam_group, 3)
         primary_row.addWidget(sys_group, 2)
@@ -1067,6 +1169,7 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
+        content.setObjectName("settingsPage")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 16, 10, 18)
         layout.setSpacing(16)
@@ -1101,6 +1204,7 @@ class SettingsDialog(QDialog):
         self.polish_form_layout(theme_layout)
 
         colors_layout = QHBoxLayout()
+        colors_layout.setSpacing(10)
         self.text_color_button = QPushButton("Text Color")
         self.text_color_button.clicked.connect(self.open_text_color_picker)
         colors_layout.addWidget(self.text_color_button)
@@ -1138,6 +1242,7 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
+        content.setObjectName("settingsPage")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 16, 10, 18)
         layout.setSpacing(16)
@@ -1296,6 +1401,7 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
+        content.setObjectName("settingsPage")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(10, 16, 10, 18)
         layout.setSpacing(16)
@@ -1345,10 +1451,11 @@ class SettingsDialog(QDialog):
         visible_count = sum(1 for name in self.parent.get_sorted_widget_names() if self.parent.widget_is_visible(name))
         issue_count = len(self.parent.collect_user_issues()) if hasattr(self.parent, "collect_user_issues") else 0
         next_scene = self.parent.get_next_scene_summary() if hasattr(self.parent, "get_next_scene_summary") else "No upcoming scheduled scene"
+        status = f"{issue_count} issue{'s' if issue_count != 1 else ''} to review" if issue_count else "All systems ready"
         self.context_header.setText(
-            f"Showing: {active_page}  |  Why: {current_scene}  |  Visible widgets: {visible_count}  |  Issues: {issue_count}\n"
-            f"Next: {next_scene}"
+            f"Page: {active_page}  ·  {visible_count} visible widget{'s' if visible_count != 1 else ''}  ·  {status}"
         )
+        self.context_header.setToolTip(f"Scene: {current_scene}\nNext: {next_scene}")
 
     def refresh_issues(self):
         if not hasattr(self, "issues_list"):
@@ -2010,12 +2117,14 @@ class SettingsDialog(QDialog):
         left_layout.setContentsMargins(0, 0, 18, 0)
         left_layout.setSpacing(14)
         
-        active_label = QLabel("Active Widgets")
+        active_label = QLabel("Your widgets")
+        active_label.setObjectName("sectionTitle")
         active_font = active_label.font()
         active_font.setBold(True)
         active_label.setFont(active_font)
         left_layout.addWidget(active_label)
         self.widget_list = QListWidget()
+        self.widget_list.setAccessibleName("Active widgets")
         self.widget_list.currentItemChanged.connect(self.display_widget_settings)
         left_layout.addWidget(self.widget_list, 1)
         
@@ -2047,9 +2156,11 @@ class SettingsDialog(QDialog):
 
         self.widget_search = QLineEdit()
         self.widget_search.setPlaceholderText("Search widget types...")
+        self.widget_search.setAccessibleName("Search widget types")
         self.widget_search.textChanged.connect(self.filter_widget_types)
         controls_layout.addWidget(self.widget_search)
         self.widget_category_combo = QComboBox()
+        self.widget_category_combo.setAccessibleName("Widget category")
         self.widget_category_combo.addItems(["All Categories"] + sorted({meta.get("category", "Other") for meta in WIDGET_REGISTRY.values()}))
         self.widget_category_combo.currentTextChanged.connect(self.filter_widget_types)
         controls_layout.addWidget(self.widget_category_combo)
@@ -2065,6 +2176,7 @@ class SettingsDialog(QDialog):
         right_layout.setSpacing(14)
         
         self.settings_title = QLabel("Widget Settings")
+        self.settings_title.setObjectName("sectionTitle")
         font = self.settings_title.font()
         font.setPointSize(12)
         font.setBold(True)
@@ -2515,14 +2627,14 @@ class SettingsDialog(QDialog):
         new_layout = QVBoxLayout(new_container)
         new_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         new_layout.setSpacing(14)
-        new_layout.setContentsMargins(0, 0, 0, 0)
+        new_layout.setContentsMargins(20, 20, 20, 20)
         
         self.widget_settings_area = new_container
         self.widget_settings_layout = new_layout
         self.widget_settings_area.setProperty("current_widget", new_widget_name)
         self.scroll_area.setWidget(new_container)
 
-        self.settings_title.setText(f"Settings: {format_widget_display_name(new_widget_name)}")
+        self.settings_title.setText(format_widget_display_name(new_widget_name))
         
         widget_type = new_widget_name.split("_")[0]
         settings = self.config.get("widget_settings", {}).get(new_widget_name, {})
@@ -2610,7 +2722,13 @@ class SettingsDialog(QDialog):
         layout_controls_layout.setContentsMargins(0, 8, 0, 0)
         layout_controls_layout.setSpacing(14)
         while self.widget_settings_layout.count():
-            layout_controls_layout.addItem(self.widget_settings_layout.takeAt(0))
+            item = self.widget_settings_layout.takeAt(0)
+            # addWidget reparents the control so collapsing its new container
+            # also hides it; addItem alone leaves it painted over the editor.
+            if item.widget():
+                layout_controls_layout.addWidget(item.widget())
+            else:
+                layout_controls_layout.addItem(item)
         layout_controls.hide()
 
         if widget_type == "time":
@@ -3032,6 +3150,8 @@ class SettingsDialog(QDialog):
             "Layout and visibility  ▾" if opened else "Layout and visibility  ▸"))
         self.widget_settings_layout.addWidget(layout_toggle)
         self.widget_settings_layout.addWidget(layout_controls)
+        for button in new_container.findChildren(QPushButton):
+            button.setAutoDefault(False)
 
     def save_current_widget_ui_to_config(self, *args): # Modified to accept *args
         widget_name = self.widget_settings_area.property("current_widget")
@@ -4454,17 +4574,19 @@ class MagicMirrorApp(QMainWindow):
 
     def setup_overlay(self):
         self.settings_button = QPushButton("Settings", self)
-        self.settings_button.setToolTip("Open settings")
+        self.settings_button.setToolTip("Open settings (S or Ctrl+,)")
         self.settings_button.clicked.connect(self.open_settings_dialog)
         self.settings_button.setStyleSheet(OVERLAY_BUTTON_QSS)
-        self.settings_button.setFixedSize(96, 36)
+        self.settings_button.setMinimumSize(112, 42)
+        self.settings_button.adjustSize()
 
-        self.edit_button = QPushButton("Edit Layout", self)
-        self.edit_button.setToolTip("Toggle layout editing")
+        self.edit_button = QPushButton("Edit layout", self)
+        self.edit_button.setToolTip("Edit widget layout (E)")
         self.edit_button.setCheckable(True)
         self.edit_button.clicked.connect(self.toggle_edit_mode)
         self.edit_button.setStyleSheet(OVERLAY_BUTTON_QSS)
-        self.edit_button.setFixedSize(108, 36)
+        self.edit_button.setMinimumSize(124, 42)
+        self.edit_button.adjustSize()
         self.overlay_hide_timer = QTimer(self)
         self.overlay_hide_timer.setSingleShot(True)
         self.overlay_hide_timer.timeout.connect(self.hide_overlay_controls)
@@ -4484,19 +4606,22 @@ class MagicMirrorApp(QMainWindow):
     def hide_overlay_controls(self):
         if self.edit_mode:
             return
+        if self.settings_button.hasFocus() or self.edit_button.hasFocus():
+            self.overlay_hide_timer.start(6000)
+            return
         self.settings_button.hide()
         self.edit_button.hide()
 
     def refresh_overlay_buttons(self):
         if not hasattr(self, "settings_button") or not hasattr(self, "edit_button"):
             return
-        margin = 14
-        gap = 8
+        margin = 20
+        gap = 10
         total_width = self.settings_button.width() + self.edit_button.width() + gap
         x = max(margin, self.width() - total_width - margin)
         self.edit_button.move(x, margin)
         self.settings_button.move(x + self.edit_button.width() + gap, margin)
-        self.edit_button.setText("Done" if self.edit_mode else "Edit Layout")
+        self.edit_button.setText("Done" if self.edit_mode else "Edit layout")
         self.edit_button.setStyleSheet(OVERLAY_BUTTON_ACTIVE_QSS if self.edit_mode else OVERLAY_BUTTON_QSS)
         self.show_overlay_controls()
 
@@ -4605,8 +4730,11 @@ class MagicMirrorApp(QMainWindow):
             self.widget_manager.draw_all(painter, self)
             if self.edit_mode:
                 painter.save()
-                accent = QColor(72, 172, 130, 210)
-                accent_fill = QColor(72, 172, 130, 34)
+                edit_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+                edit_font.setPointSizeF(max(11, QApplication.font().pointSizeF()))
+                painter.setFont(edit_font)
+                accent = QColor(112, 181, 255, 235)
+                accent_fill = QColor(0, 102, 204, 34)
                 guide_color = QColor(246, 184, 76, 170)
                 label_bg = QColor(12, 14, 18, 205)
                 label_text = QColor(238, 244, 250)
@@ -4624,6 +4752,7 @@ class MagicMirrorApp(QMainWindow):
                         continue
                     bbox = self.get_widget_bbox(name)
                     if bbox:
+                        delete_rect, resize_rect = self.get_widget_edit_controls(bbox)
                         painter.setPen(QPen(accent, 1))
                         painter.setBrush(QBrush(accent_fill))
                         painter.drawRoundedRect(bbox, 6, 6)
@@ -4643,8 +4772,7 @@ class MagicMirrorApp(QMainWindow):
                             painter.setPen(QColor(18, 18, 18))
                             painter.drawText(lock_rect, Qt.AlignmentFlag.AlignCenter, "LOCK")
                         else:
-                            btn_size = 22
-                            btn_rect = QRect(bbox.right() - btn_size - 5, bbox.top() + 5, btn_size, btn_size)
+                            btn_rect = delete_rect
                             self.widget_delete_hitboxes[name] = btn_rect
                             painter.setPen(Qt.PenStyle.NoPen)
                             painter.setBrush(QColor(209, 74, 74, 225))
@@ -4653,26 +4781,39 @@ class MagicMirrorApp(QMainWindow):
                             painter.drawText(btn_rect, Qt.AlignmentFlag.AlignCenter, "X")
 
                         if self.is_edit_resizable_widget(name) and not layout.get("locked"):
-                            handle_size = 18
-                            handle_rect = QRect(bbox.right() - handle_size - 5, bbox.bottom() - handle_size - 5, handle_size, handle_size)
+                            handle_rect = resize_rect
                             self.widget_resize_hitboxes[name] = handle_rect
                             painter.setPen(Qt.PenStyle.NoPen)
-                            painter.setBrush(QColor(64, 132, 186, 225))
+                            painter.setBrush(QColor(0, 102, 204, 245))
                             painter.drawRoundedRect(handle_rect, 5, 5)
                             painter.setPen(QPen(QColor(255, 255, 255), 2))
                             painter.drawLine(handle_rect.left() + 5, handle_rect.bottom() - 5, handle_rect.right() - 5, handle_rect.top() + 5)
                             painter.drawLine(handle_rect.right() - 5, handle_rect.top() + 5, handle_rect.right() - 5, handle_rect.top() + 11)
                             painter.drawLine(handle_rect.right() - 5, handle_rect.top() + 5, handle_rect.right() - 11, handle_rect.top() + 5)
 
-                plus_size = 30
-                plus_rect = QRect(self.central_widget.width() - plus_size - 18, 62, plus_size, plus_size)
+                plus_size = 36
+                plus_rect = QRect(self.central_widget.width() - plus_size - 20,
+                                  self.settings_button.geometry().bottom() + 12, plus_size, plus_size)
                 self.add_widget_button_rect = plus_rect
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(47, 143, 107, 230))
+                painter.setBrush(QColor(0, 102, 204, 245))
                 painter.drawEllipse(plus_rect)
                 painter.setPen(QColor(255, 255, 255))
                 painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
                 painter.restore()
+
+    def get_widget_edit_controls(self, bbox):
+        """Keep both edit targets reachable, including on short clock widgets."""
+        size, gap = 28, 6
+        width, height = self.central_widget.width(), self.central_widget.height()
+        x = max(0, min(bbox.right() - size - 5, width - size))
+        delete_y = max(0, min(bbox.top() + 5, height - size))
+        resize_y = max(0, min(bbox.bottom() - size - 5, height - size))
+        delete_rect = QRect(x, delete_y, size, size)
+        resize_rect = QRect(x, resize_y, size, size)
+        if delete_rect.adjusted(-gap, -gap, gap, gap).intersects(resize_rect):
+            resize_rect.moveLeft(x - size - gap if x >= size + gap else x + size + gap)
+        return delete_rect, resize_rect
 
     def is_edit_resizable_widget(self, widget_name):
         return widget_name in self.config.get("widget_positions", {})
@@ -5270,6 +5411,9 @@ class MagicMirrorApp(QMainWindow):
             self.save_config()
 
     def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Comma:
+            self.open_settings_dialog()
+            return
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
             self.undo_layout_change()
             return
@@ -5480,7 +5624,8 @@ if __name__ == "__main__":
         window_ref = current_window.get("instance")
         if window_ref and window_ref.config.get("auto_relaunch_on_crash", False):
             try:
-                subprocess.Popen([sys.executable, *sys.argv], cwd=os.getcwd())
+                restart_args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+                subprocess.Popen([sys.executable, *restart_args], cwd=os.getcwd())
             except Exception as e:
                 print(f"Auto relaunch failed: {e}")
         os._exit(1)
@@ -5498,7 +5643,7 @@ if __name__ == "__main__":
     default_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     default_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(default_font)
-    app.setWindowIcon(QIcon("resources/icon.png"))
+    app.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "resources", "icon.png")))
     window = MagicMirrorApp()
     current_window["instance"] = window
     window.show()

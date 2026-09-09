@@ -1,4 +1,7 @@
-/Build/
+/Build/*
+!/Build/BuildMagicMirror.cmd
+/dist/
+*.spec
 /_internal/
 /__pycache__/
 /.cache/

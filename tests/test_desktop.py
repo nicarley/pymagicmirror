@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QImage, QMouseEvent, QPainter
-from PySide6.QtWidgets import QApplication, QComboBox
+from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QWidget
 
 from Main import MagicMirrorApp, SettingsDialog, SPORTS_TEAM_CACHE
 from widget_manager import WidgetManager
@@ -97,6 +97,20 @@ class DesktopRegressionTests(unittest.TestCase):
         style.setCurrentText("Normal")
         self.assertFalse(self.window.ticker_timer.isActive())
 
+    def test_layout_disclosure_hides_and_reveals_its_controls_together(self):
+        dialog = self.settings_dialog()
+        dialog.tabs.setCurrentWidget(dialog.widget_tab)
+        controls = dialog.widget_settings_area.findChild(QWidget, "widgetLayoutControls")
+        anchor = dialog.widget_settings_area.findChild(QComboBox, "layout_anchor_combo")
+        disclosure = next(button for button in dialog.widget_settings_area.findChildren(QPushButton)
+                          if button.text().startswith("Layout and visibility"))
+        self.assertTrue(controls.isAncestorOf(anchor))
+        self.assertFalse(anchor.isVisibleTo(dialog.widget_settings_area))
+        disclosure.click()
+        self.assertTrue(anchor.isVisibleTo(dialog.widget_settings_area))
+        disclosure.click()
+        self.assertFalse(anchor.isVisibleTo(dialog.widget_settings_area))
+
     def test_switching_back_to_ticker_page_restarts_animation(self):
         self.window.config["widget_settings"]["sports_1"]["style"] = "Ticker"
         self.window.config["active_page"] = "other"
@@ -143,6 +157,24 @@ class DesktopRegressionTests(unittest.TestCase):
         self.window.central_widget_mouse_press(self.mouse_event(QEvent.Type.MouseButtonPress, point))
         self.assertIsNone(self.window.drag_data["widget"])
         self.assertEqual(self.window.undo_stack, [])
+
+    def test_short_widget_edit_controls_route_delete_and_resize_separately(self):
+        self.window.config["active_page"] = "other"
+        self.window.widget_manager.widgets["time_2"].text = "12:34"
+        self.window.edit_mode = True
+        self.paint_widgets()
+        delete = self.window.widget_delete_hitboxes["time_2"]
+        resize = self.window.widget_resize_hitboxes["time_2"]
+        self.assertFalse(delete.intersects(resize))
+        with patch.object(self.window, "remove_widget_by_name") as remove:
+            self.window.central_widget_mouse_press(
+                self.mouse_event(QEvent.Type.MouseButtonPress, delete.center()))
+            remove.assert_called_once_with("time_2", confirm=True)
+        self.paint_widgets()
+        self.window.central_widget_mouse_press(
+            self.mouse_event(QEvent.Type.MouseButtonPress, resize.center()))
+        self.assertEqual(self.window.drag_data["mode"], "resize")
+        self.assertEqual(self.window.drag_data["widget"], "time_2")
 
     def test_move_undo_redo_restores_original_anchor_and_position(self):
         self.window.edit_mode = True

@@ -160,14 +160,15 @@ python -m unittest discover -s tests -v
 
 ## Build for Windows
 
-Install PyInstaller in the active environment and run the build script:
+Double-click `Build\BuildMagicMirror.cmd` to build and open the app with the project's existing configuration. The script creates `.venv` when needed and installs the pinned application and build dependencies. Its window stays open so you can read any errors.
+
+To build without launching:
 
 ```powershell
-python -m pip install pyinstaller
 .\build_windows.cmd
 ```
 
-The packaged application is written to `dist\MagicMirror`. The build script uses the project virtual environment when available and does not contain machine-specific paths.
+The packaged application is written to `dist\MagicMirror`. Use `.\build_windows.cmd --run` to build and launch from a terminal. Rebuilds preserve configuration, profiles, and templates already in the output folder. Build staging stays under `.cache\pyinstaller`; personal settings are not bundled into the executable.
 
 ## Project Structure
 
