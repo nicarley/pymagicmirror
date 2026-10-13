@@ -97,6 +97,25 @@ const settingsTitle=document.createElement('h3');settingsTitle.textContent='Cont
 tab.appendChild(widgets);
 """
 
+REMOTE_AUDIO_JS = r"""
+const tab=document.getElementById('tab-remote-audio');tab.innerHTML='';
+createTabIntro(tab,'Remote Audio','Play audio sent over your local network through the mirror computer’s default speakers.');
+const settings=config.remote_audio||(config.remote_audio={});
+for(const [kind,title,program,description] of [
+  ['airplay','AirPlay','uxplay','Receives audio from Apple devices. Mirrored video stays hidden.'],
+  ['cast','Google Cast (experimental)','openchromecast','VLC for Android has been verified. Many Google apps reject PC receivers.']
+]){
+  const section=createSection(title),grid=document.createElement('div');grid.className='grid-2';section.appendChild(grid);
+  addField(grid,`Allow ${title} audio`,()=>buildInput('checkbox',settings[`${kind}_enabled`]||false,e=>{settings[`${kind}_enabled`]=e.target.checked}));
+  addField(grid,'Name shown to devices',()=>buildInput('text',settings[`${kind}_name`]||'Magic Mirror',e=>{settings[`${kind}_name`]=e.target.value}));
+  addField(grid,`Path to ${program}`,()=>buildInput('text',settings[`${kind}_executable`]||'',e=>{settings[`${kind}_executable`]=e.target.value}));
+  const status=meta.remote_audio_status?.[kind]||{state:'off',detail:'Disabled'};
+  const note=document.createElement('p');note.className='helper-text';note.textContent=`Status: ${status.state} — ${status.detail} ${description} Leave the program path blank if it is on PATH.`;section.appendChild(note);
+  tab.appendChild(section);
+}
+const refresh=document.createElement('button');refresh.className='secondary';refresh.textContent='Refresh receiver status';refresh.onclick=()=>loadState();tab.appendChild(refresh);
+"""
+
 DIAGNOSTICS_JS = r"""
 const tab=document.getElementById('tab-diagnostics');tab.innerHTML='';createTabIntro(tab,'System','Keep an eye on your display and widget health.');const section=createSection('Diagnostics');const pre=document.createElement('pre');pre.textContent=(meta.diagnostics_lines||[]).join('\n');section.appendChild(pre);const row=document.createElement('div');row.className='inline-row';row.style.marginTop='16px';const refreshBtn=document.createElement('button');refreshBtn.className='secondary';refreshBtn.textContent='Refresh diagnostics';refreshBtn.onclick=()=>loadState();row.appendChild(refreshBtn);section.appendChild(row);tab.appendChild(section);
 """
@@ -118,11 +137,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;pa
 .preview-note{position:absolute;left:24px;bottom:22px;right:24px;color:#ededf3;font-size:.8125rem;pointer-events:none;line-height:1.6;text-align:center}.preview-note span{display:inline-block;background:rgba(28,28,31,.94);border:1px solid #55555e;border-radius:10px;padding:10px 16px;box-shadow:0 4px 16px #0003}
 .preview-error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:36px;text-align:center;color:#d9d9e1;background:#161618}.preview-error[hidden]{display:none}
 #settings-pane{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel)}
-.tabs{display:flex;gap:5px;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.tabs{display:flex;gap:5px;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto}
 button{min-height:40px;border:1px solid transparent;border-radius:9px;padding:9px 16px;cursor:pointer;background:var(--accent);color:#fff;font:inherit;font-weight:600;line-height:1.4;transition:background-color .15s ease,border-color .15s ease}
 button:hover{background:var(--accent-hi)}button.secondary{background:var(--button);color:var(--text)}button.secondary:hover{background:var(--button-hover)}button.danger{background:var(--danger-bg);border-color:var(--danger-line);color:var(--danger)}button.danger:hover{border-color:var(--danger)}button.success{background:var(--accent)}button.success:hover{background:var(--accent-hi)}
 button:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:3px}button:disabled,button:disabled:hover{background:var(--button);border-color:var(--line);color:var(--muted);cursor:default}
-.tab-btn{flex:1;background:transparent;color:var(--muted);border:1px solid transparent;padding:9px 12px;font-weight:550}.tab-btn:hover{background:var(--button);color:var(--text)}.tab-btn.active{color:var(--accent-text);border-color:var(--selection-line);background:var(--selection);font-weight:650}
+.tab-btn{flex:1 0 auto;white-space:nowrap;background:transparent;color:var(--muted);border:1px solid transparent;padding:9px 12px;font-weight:550}.tab-btn:hover{background:var(--button);color:var(--text)}.tab-btn.active{color:var(--accent-text);border-color:var(--selection-line);background:var(--selection);font-weight:650}
 #settings-content{flex:1;min-height:0;overflow:auto;padding:28px;scrollbar-gutter:stable}#settings-footer{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 26px;border-top:1px solid var(--line);background:var(--panel2)}
 #settings-footer>div{display:flex;flex-direction:column;gap:4px;min-width:0}#settings-footer>button{flex-shrink:0}#status:empty{display:none}#dirty-indicator{color:var(--muted);font-size:.8125rem}#dirty-indicator.changed{color:var(--warn)}#dirty-indicator.changed:before{content:'●';font-size:9px;margin-right:7px}
 .tab-panel{display:none}.tab-panel.active{display:block}.tab-intro{margin:0 2px 24px}.tab-intro h1{font-size:1.75rem;line-height:1.2;letter-spacing:-.8px;font-weight:650;margin:0 0 8px}.tab-intro p{margin:0;color:var(--muted);font-size:.875rem;max-width:48ch}
@@ -157,12 +176,14 @@ pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;b
       <button id="nav-general" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-general" data-tab="general" onclick="switchTab('general')">Display</button>
       <button id="nav-appearance" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-appearance" tabindex="-1" data-tab="appearance" onclick="switchTab('appearance')">Style</button>
       <button id="nav-widgets" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-widgets" tabindex="-1" data-tab="widgets" onclick="switchTab('widgets')">Content</button>
+      <button id="nav-remote-audio" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-remote-audio" tabindex="-1" data-tab="remote-audio" onclick="switchTab('remote-audio')">Remote Audio</button>
       <button id="nav-diagnostics" class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-diagnostics" tabindex="-1" data-tab="diagnostics" onclick="switchTab('diagnostics')">System</button>
     </div>
     <div id="settings-content">
       <div id="tab-general" class="tab-panel active" role="tabpanel" aria-labelledby="nav-general"><span class="muted">Loading settings...</span></div>
       <div id="tab-appearance" class="tab-panel" role="tabpanel" aria-labelledby="nav-appearance"></div>
       <div id="tab-widgets" class="tab-panel" role="tabpanel" aria-labelledby="nav-widgets"></div>
+      <div id="tab-remote-audio" class="tab-panel" role="tabpanel" aria-labelledby="nav-remote-audio"></div>
       <div id="tab-diagnostics" class="tab-panel" role="tabpanel" aria-labelledby="nav-diagnostics"></div>
     </div>
     <div id="settings-footer"><div><span id="status" class="muted" role="status" aria-live="polite"></span><span id="dirty-indicator">Loading settings…</span></div><button id="save-config-btn" onclick="saveConfig()" disabled>Save changes</button></div>
@@ -362,8 +383,9 @@ function createSportsEditor(settings,widgetName){
 function renderGeneralTab(){/*__GENERAL__*/}
 function renderAppearanceTab(){/*__APPEARANCE__*/}
 function renderWidgetsTab(){/*__WIDGETS__*/}
+function renderRemoteAudioTab(){/*__REMOTE_AUDIO__*/}
 function renderDiagnosticsTab(){/*__DIAGNOSTICS__*/}
-function renderActiveTab(){if(activeTab==='general')renderGeneralTab();else if(activeTab==='appearance')renderAppearanceTab();else if(activeTab==='widgets')renderWidgetsTab();else renderDiagnosticsTab()}
+function renderActiveTab(){if(activeTab==='general')renderGeneralTab();else if(activeTab==='appearance')renderAppearanceTab();else if(activeTab==='widgets')renderWidgetsTab();else if(activeTab==='remote-audio')renderRemoteAudioTab();else renderDiagnosticsTab()}
 function renderAll(){renderActiveTab();renderPreviewWidgets()}
 img.onload=()=>{document.getElementById('preview-error').hidden=true;resizeOverlay()};
 img.onerror=()=>{document.getElementById('preview-error').hidden=false;overlay.innerHTML=''};
@@ -484,6 +506,7 @@ def _build_state(app):
             "current_scene": getattr(app, "current_scene_name", ""),
             "layout_pages": app.get_layout_pages(),
             "widget_statuses": {name: app.get_widget_status(name) for name in config.get("widget_positions", {})},
+            "remote_audio_status": app.remote_audio_manager.status() if hasattr(app, "remote_audio_manager") else {},
             "diagnostics_lines": _build_diagnostics(app),
             "background_mode_options": ["None"] + [f"Camera {i}" for i in app.detect_available_cameras()] + ["Camera", "Image", "Video", "YouTube"],
             "youtube_quality_options": ["Best Available", "1080p", "720p", "480p"],
@@ -649,6 +672,7 @@ class MagicMirrorHandler(BaseHTTPRequestHandler):
             html = html.replace("/*__GENERAL__*/", self.server.general_js)
             html = html.replace("/*__APPEARANCE__*/", self.server.appearance_js)
             html = html.replace("/*__WIDGETS__*/", self.server.widgets_js)
+            html = html.replace("/*__REMOTE_AUDIO__*/", self.server.remote_audio_js)
             html = html.replace("/*__DIAGNOSTICS__*/", self.server.diagnostics_js)
             self.send_response(200)
             self.send_header("Content-type", "text/html")
@@ -724,6 +748,7 @@ class MagicMirrorServer(ThreadingHTTPServer):
         self.general_js = GENERAL_JS
         self.appearance_js = APPEARANCE_JS
         self.widgets_js = WIDGETS_JS
+        self.remote_audio_js = REMOTE_AUDIO_JS
         self.diagnostics_js = DIAGNOSTICS_JS
 
 

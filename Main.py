@@ -33,6 +33,7 @@ try:
 except ImportError:
     psutil = None
 from widget_manager import SESSION, SPORTS_REQUEST_HEADERS, WidgetManager, WIDGET_CLASSES
+from remote_audio import RemoteAudioManager, default_remote_audio_config, normalize_remote_audio_config
 import web_server
 import calendar
 
@@ -929,6 +930,11 @@ class SettingsDialog(DesignDialog):
         self.tabs.addTab(self.pages_tab, "Pages")
         self.setup_pages_tab()
 
+        self.remote_audio_tab = QWidget()
+        self.remote_audio_layout = QVBoxLayout(self.remote_audio_tab)
+        self.tabs.addTab(self.remote_audio_tab, "Remote Audio")
+        self.setup_remote_audio_tab()
+
         self.widget_tab = QWidget()
         self.widget_layout = QVBoxLayout(self.widget_tab)
         self.tabs.addTab(self.widget_tab, "Widgets")
@@ -1395,6 +1401,106 @@ class SettingsDialog(DesignDialog):
         self.refresh_page_manager()
         self.refresh_template_choices()
         self.refresh_scene_rule_list()
+
+    def setup_remote_audio_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("settingsPage")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(10, 16, 10, 18)
+        layout.setSpacing(16)
+        scroll.setWidget(content)
+        self.remote_audio_layout.addWidget(scroll)
+
+        intro = QLabel("Let devices on the same local network play through this computer's default speakers. "
+                       "The receiver programs must be installed on this computer.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.remote_audio_controls = {}
+        for kind, title, program in (("airplay", "AirPlay", "uxplay"),
+                                     ("cast", "Google Cast (experimental)", "openchromecast")):
+            group = QGroupBox(title)
+            form = QFormLayout(group)
+            self.polish_form_layout(form)
+            enabled = QCheckBox(f"Allow {title} audio")
+            name = QLineEdit()
+            name.setMaxLength(64)
+            name.setPlaceholderText("Magic Mirror")
+            executable = QLineEdit()
+            executable.setPlaceholderText(f"Path to {program}.exe, or leave blank if it is on PATH")
+            executable.setAccessibleName(f"{title} receiver executable")
+            browse = QPushButton("Browse…")
+            browse.clicked.connect(lambda _checked=False, selected=kind: self.browse_remote_audio_executable(selected))
+            path_row = QWidget()
+            path_layout = QHBoxLayout(path_row)
+            path_layout.setContentsMargins(0, 0, 0, 0)
+            path_layout.addWidget(executable, 1)
+            path_layout.addWidget(browse)
+            status = QLabel()
+            status.setWordWrap(True)
+            status.setTextFormat(Qt.TextFormat.PlainText)
+            form.addRow(enabled)
+            form.addRow("Name shown to devices:", name)
+            form.addRow("Receiver program:", path_row)
+            form.addRow("Status:", status)
+            note = QLabel(
+                "Receives audio from Apple devices through UxPlay. Mirrored video stays hidden."
+                if kind == "airplay" else
+                "PC Cast receiving is experimental. VLC for Android has been verified; many Google apps reject PC receivers."
+            )
+            note.setWordWrap(True)
+            form.addRow(note)
+            self.remote_audio_controls[kind] = (enabled, name, executable, status)
+            enabled.toggled.connect(self.live_update_remote_audio)
+            name.editingFinished.connect(self.live_update_remote_audio)
+            executable.editingFinished.connect(self.live_update_remote_audio)
+            layout.addWidget(group)
+
+        self.refresh_remote_audio_controls()
+        refresh = QPushButton("Refresh receiver status")
+        refresh.clicked.connect(self.refresh_remote_audio_status)
+        layout.addWidget(refresh)
+        layout.addStretch()
+        self.remote_audio_timer = QTimer(self)
+        self.remote_audio_timer.timeout.connect(self.refresh_remote_audio_status)
+        self.remote_audio_timer.start(3000)
+        self.finished.connect(self.remote_audio_timer.stop)
+
+    def refresh_remote_audio_controls(self):
+        settings = normalize_remote_audio_config(self.config.get("remote_audio"))
+        for kind, (enabled, name, executable, _status) in self.remote_audio_controls.items():
+            for control, value in ((enabled, settings[f"{kind}_enabled"]),
+                                   (name, settings[f"{kind}_name"]),
+                                   (executable, settings[f"{kind}_executable"])):
+                control.blockSignals(True)
+                control.setChecked(value) if isinstance(control, QCheckBox) else control.setText(value)
+                control.blockSignals(False)
+        self.refresh_remote_audio_status()
+
+    def live_update_remote_audio(self, *_):
+        settings = normalize_remote_audio_config(self.config.get("remote_audio"))
+        for kind, (enabled, name, executable, _status) in self.remote_audio_controls.items():
+            settings[f"{kind}_enabled"] = enabled.isChecked()
+            settings[f"{kind}_name"] = name.text()
+            settings[f"{kind}_executable"] = executable.text()
+        self.config["remote_audio"] = normalize_remote_audio_config(settings)
+        self.parent.remote_audio_manager.apply(self.config["remote_audio"])
+        self.refresh_remote_audio_status()
+
+    def browse_remote_audio_executable(self, kind):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose receiver program", "", "Programs (*.exe);;All files (*)")
+        if path:
+            self.remote_audio_controls[kind][2].setText(path)
+            self.live_update_remote_audio()
+
+    def refresh_remote_audio_status(self):
+        statuses = self.parent.remote_audio_manager.status()
+        for kind, (_enabled, _name, _executable, label) in self.remote_audio_controls.items():
+            state = statuses[kind]
+            label.setText(f"{state['state'].title()}: {state['detail']}")
 
     def setup_diagnostics_tab(self):
         scroll = QScrollArea()
@@ -2047,6 +2153,8 @@ class SettingsDialog(DesignDialog):
             self.parent.config.update(loaded)
             self.parent.migrate_config_schema()
             self.config = self.parent.config
+            self.parent.remote_audio_manager.apply(self.config.get("remote_audio"))
+            self.refresh_remote_audio_controls()
             self.parent.widget_manager.config = self.parent.config
             self.parent.widget_manager.load_widgets()
             self.parent.apply_performance_settings()
@@ -3417,6 +3525,7 @@ class SettingsDialog(DesignDialog):
     def accept(self):
         self.save_current_widget_ui_to_config()
         self.parent.save_config()
+        self.parent.remote_audio_manager.apply(self.config.get("remote_audio"))
         self.parent.widget_manager.restart_updates() # Restart updates only on save
         self.parent.restart_camera() # Ensure camera/background changes are applied
         super().accept()
@@ -3424,6 +3533,7 @@ class SettingsDialog(DesignDialog):
     def reject(self):
         self.parent.config.clear()
         self.parent.config.update(self.original_config)
+        self.parent.remote_audio_manager.apply(self.parent.config.get("remote_audio"))
         self.parent.set_fullscreen(self.parent.config.get("fullscreen", True))
         self.parent.restart_camera()
         self.parent.widget_manager.config = self.parent.config
@@ -3476,6 +3586,8 @@ class MagicMirrorApp(QMainWindow):
         self.widget_instance_text_update_requested.connect(self.apply_widget_instance_text_update, Qt.ConnectionType.QueuedConnection)
         self.ui_call_requested.connect(self._execute_ui_call, Qt.ConnectionType.QueuedConnection)
         self.load_config()
+        self.remote_audio_manager = RemoteAudioManager()
+        self.remote_audio_manager.apply(self.config.get("remote_audio"))
 
         self.setWindowTitle("Magic Mirror")
         self.central_widget = None
@@ -4028,6 +4140,7 @@ class MagicMirrorApp(QMainWindow):
             "background_blur": 0,
             "background_brightness": 1.0,
             "background_volume": 0,
+            "remote_audio": default_remote_audio_config(),
             "auto_relaunch_on_crash": False,
             "video_rotation": 0,
             "mirror_video": False,
@@ -4090,6 +4203,7 @@ class MagicMirrorApp(QMainWindow):
         config["background_blur"] = max(0, min(80, int(float(config.get("background_blur", 0) or 0))))
         config["background_brightness"] = max(0.0, min(3.0, float(config.get("background_brightness", 1.0) or 1.0)))
         config["background_volume"] = max(0, min(100, int(float(config.get("background_volume", 0) or 0))))
+        config["remote_audio"] = normalize_remote_audio_config(config.get("remote_audio"))
         config["text_scale_multiplier"] = max(0.4, min(3.0, float(config.get("text_scale_multiplier", 1.0) or 1.0)))
         config["feed_refresh_interval_ms"] = max(60000, int(float(config.get("feed_refresh_interval_ms", 3600000) or 3600000)))
         config["camera_fps"] = max(1, min(60, int(float(config.get("camera_fps", 30) or 30))))
@@ -5574,6 +5688,7 @@ class MagicMirrorApp(QMainWindow):
 
     def apply_remote_config(self):
         self.migrate_config_schema()
+        self.remote_audio_manager.apply(self.config.get("remote_audio"))
         self.set_fullscreen(self.config.get("fullscreen", True))
         self.restart_camera()
         self.widget_manager.config = self.config
@@ -5601,6 +5716,7 @@ class MagicMirrorApp(QMainWindow):
 
     def closeEvent(self, event):
         self.stop_web_server()
+        self.remote_audio_manager.shutdown()
 
         if getattr(self, "widget_manager", None) is not None:
             self.widget_manager.shutdown()
